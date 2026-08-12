@@ -1,0 +1,13 @@
+services:
+  mongo:
+    image: mongo:8
+    ports: ["27017:27017"]
+    volumes: [mongo-data:/data/db]
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports: ["6379:6379"]
+  lgtm:
+    image: grafana/otel-lgtm
+    ports: ["3000:3000", "4317:4317", "4318:4318"]
+volumes:
+  mongo-data:

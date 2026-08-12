@@ -1,0 +1,2 @@
+# v2 defaults: errcheck, govet, ineffassign, staticcheck, unused — plan's list, nothing exotic.
+version: "2"
