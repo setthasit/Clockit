@@ -22,6 +22,14 @@ import (
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
+	db, env := testDB(t)
+	return NewStore(db, env)
+}
+
+// testDB is shared with the handler tests, which need the same database and
+// envelope for the user store as well.
+func testDB(t *testing.T) (*mongo.Database, *crypto.Envelope) {
+	t.Helper()
 	uri := os.Getenv("MONGO_URI")
 	if uri == "" {
 		t.Skip("MONGO_URI not set")
@@ -54,7 +62,7 @@ func testStore(t *testing.T) *Store {
 	if err := mongox.EnsureIndexes(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	return NewStore(db, env)
+	return db, env
 }
 
 func testEmployer(t *testing.T, s *Store) *Employer {
