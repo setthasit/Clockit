@@ -25,11 +25,11 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 2.1: Model + store (JIT provisioning, membership claim)
   - [x] 2.2: User middleware + `GET/PATCH /v1/me`
   - [x] 2.3: Tests
-- [ ] Task 3: Employer domain
+- [x] Task 3: Employer domain
   - [x] 3.1: Model + store
   - [x] 3.2: `POST/GET/PATCH /v1/employers`
   - [x] 3.3: Membership endpoints (add/list/rate/remove)
-  - [ ] 3.4: Tests
+  - [x] 3.4: Tests
 - [ ] Task 4: Entry domain — geo rules
   - [ ] 4.1: `geo.go` (haversine + fix validation)
   - [ ] 4.2: Geo unit tests
