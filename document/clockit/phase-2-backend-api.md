@@ -22,7 +22,7 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 1.2: Error catalog (`internal/httpx/codes.go`)
   - [x] 1.3: Rate-limit middleware (`internal/valkeyx/ratelimit.go`)
 - [ ] Task 2: User domain
-  - [ ] 2.1: Model + store (JIT provisioning, membership claim)
+  - [x] 2.1: Model + store (JIT provisioning, membership claim)
   - [ ] 2.2: User middleware + `GET/PATCH /v1/me`
   - [ ] 2.3: Tests
 - [ ] Task 3: Employer domain
