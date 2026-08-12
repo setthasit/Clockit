@@ -103,7 +103,9 @@ func (s *Store) Update(ctx context.Context, employerID, ownerUserID bson.ObjectI
 	if len(set) == 0 {
 		return nil
 	}
-	_, err = s.employers.UpdateByID(ctx, employerID, bson.M{"$set": set})
+	// Owner-scoped write filter, not UpdateByID: ownership is re-checked at write
+	// time, so a transfer between the read above and here cannot be overwritten.
+	_, err = s.employers.UpdateOne(ctx, bson.M{"_id": employerID, "owner_user_id": ownerUserID}, bson.M{"$set": set})
 	return err
 }
 

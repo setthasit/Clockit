@@ -13,8 +13,8 @@ type Employer struct {
 	OwnerUserID bson.ObjectID `bson:"owner_user_id"`
 	Name        string        `bson:"name"`
 	Timezone    string        `bson:"timezone"`
-	AnchorEnc   []byte        `bson:"anchor_enc"`
-	DEKWrapped  []byte        `bson:"dek_wrapped"`
+	AnchorEnc   []byte        `bson:"anchor_enc" json:"-"`
+	DEKWrapped  []byte        `bson:"dek_wrapped" json:"-"`
 	CreatedAt   time.Time     `bson:"created_at"`
 }
 
