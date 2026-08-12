@@ -1,0 +1,35 @@
+package employer
+
+import (
+	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// Employer carries the wrapped DEK and the sealed anchor, so it must never be
+// marshalled to a client — handlers build a projection instead.
+type Employer struct {
+	ID          bson.ObjectID `bson:"_id,omitempty"`
+	OwnerUserID bson.ObjectID `bson:"owner_user_id"`
+	Name        string        `bson:"name"`
+	Timezone    string        `bson:"timezone"`
+	AnchorEnc   []byte        `bson:"anchor_enc"`
+	DEKWrapped  []byte        `bson:"dek_wrapped"`
+	CreatedAt   time.Time     `bson:"created_at"`
+}
+
+type Membership struct {
+	ID                 bson.ObjectID  `bson:"_id,omitempty"`
+	EmployerID         bson.ObjectID  `bson:"employer_id"`
+	Email              string         `bson:"email"`
+	UserID             *bson.ObjectID `bson:"user_id,omitempty"`
+	Status             string         `bson:"status"`
+	HourlyRateCentsEnc []byte         `bson:"hourly_rate_cents_enc,omitempty"`
+	CreatedAt          time.Time      `bson:"created_at"`
+}
+
+// LatLng is both the JSON body of anchor_enc and the wire shape of an anchor.
+type LatLng struct {
+	Lat float64 `json:"lat"`
+	Lng float64 `json:"lng"`
+}
