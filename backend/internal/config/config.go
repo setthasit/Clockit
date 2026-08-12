@@ -22,6 +22,7 @@ type Config struct {
 	MaxClockSkew    time.Duration
 	AnchorRadiusM   int
 	SpeedAnomalyKMH int
+	RateLimitPerMin int
 }
 
 func Load() (Config, error) {
@@ -46,6 +47,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.SpeedAnomalyKMH, err = getint("SPEED_ANOMALY_KMH", 200); err != nil {
+		return Config{}, err
+	}
+	if cfg.RateLimitPerMin, err = getint("RATE_LIMIT_PER_MIN", 30); err != nil {
 		return Config{}, err
 	}
 	if cfg.MaxClockSkew, err = getdur("MAX_CLOCK_SKEW", 5*time.Minute); err != nil {
