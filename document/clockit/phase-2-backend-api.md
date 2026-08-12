@@ -26,7 +26,7 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 2.2: User middleware + `GET/PATCH /v1/me`
   - [x] 2.3: Tests
 - [ ] Task 3: Employer domain
-  - [ ] 3.1: Model + store
+  - [x] 3.1: Model + store
   - [ ] 3.2: `POST/GET/PATCH /v1/employers`
   - [ ] 3.3: Membership endpoints (add/list/rate/remove)
   - [ ] 3.4: Tests
