@@ -21,17 +21,21 @@ Employee clock-in/clock-out with location validation. Employees clock in from a 
 |---|---|
 | `mobile/` — employee app | React Native, Expo, Zustand, NativeWind, Auth0 |
 | `web/` — employer app | React 19, Astryx (StyleX), Vite, Auth0 |
-| `backend/` — API | Go, Echo, uber/fx, MongoDB, Valkey, KEK/DEK envelope encryption (Cloud KMS) |
-| `infra/` | GCP (GKE Autopilot, Cloud CDN, Cloud KMS), MongoDB Atlas (private endpoint), Tailscale (beta env), OpenTofu |
+| `backend/` — API | Go, Echo, uber/fx, MongoDB, Valkey, KEK/DEK envelope encryption (Cloud KMS), OpenTelemetry (traces + metrics + logs) |
+| `infra/` | GCP (GKE Autopilot, Cloud CDN, Cloud KMS), MongoDB Atlas (private endpoint), Cloudflare DNS, Tailscale (beta env), OpenTofu |
+
+Development is local-first (docker-compose: MongoDB, Valkey, `grafana/otel-lgtm`); cloud infra is provisioned last, right before publishing.
 
 ## Roadmap
 
 - [x] System design
-- [ ] Infra bootstrap (VPC, GKE, Atlas + PSC, KMS, registry)
-- [ ] Backend MVP (auth, envelope crypto, clock-in/out + proximity, employers/members)
+- [ ] Foundations (compose stack, backend skeleton, Auth0 tenant, seed script)
+- [ ] Backend MVP (auth, envelope crypto, clock-in/out + proximity, employers/members, OTel)
 - [ ] Mobile MVP (auth, clock screen, history, offline outbox)
 - [ ] Web MVP (onboarding, employees, calendar, table + tips)
 - [ ] Background pings + reports
+- [ ] Infra (OpenTofu stacks, CI/CD, beta on tailnet)
+- [ ] Publish (prod deploy, store submissions)
 - [ ] Hardening (Play Integrity / App Attest, alerting, backup drill)
 
 ## License
