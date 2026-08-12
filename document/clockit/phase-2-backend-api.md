@@ -17,10 +17,10 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
 
 ## Tasks
 
-- [ ] Task 1: Shared plumbing
+- [x] Task 1: Shared plumbing
   - [x] 1.1: Index bootstrap (`internal/mongox/indexes.go`)
   - [x] 1.2: Error catalog (`internal/httpx/codes.go`)
-  - [ ] 1.3: Rate-limit middleware (`internal/valkeyx/ratelimit.go`)
+  - [x] 1.3: Rate-limit middleware (`internal/valkeyx/ratelimit.go`)
 - [ ] Task 2: User domain
   - [ ] 2.1: Model + store (JIT provisioning, membership claim)
   - [ ] 2.2: User middleware + `GET/PATCH /v1/me`
