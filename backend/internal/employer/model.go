@@ -18,6 +18,12 @@ type Employer struct {
 	CreatedAt   time.Time     `bson:"created_at"`
 }
 
+const (
+	statusInvited = "invited"
+	statusActive  = "active"
+	statusRemoved = "removed"
+)
+
 type Membership struct {
 	ID                 bson.ObjectID  `bson:"_id,omitempty"`
 	EmployerID         bson.ObjectID  `bson:"employer_id"`
@@ -26,6 +32,18 @@ type Membership struct {
 	Status             string         `bson:"status"`
 	HourlyRateCentsEnc []byte         `bson:"hourly_rate_cents_enc,omitempty"`
 	CreatedAt          time.Time      `bson:"created_at"`
+}
+
+// Member is the employer-owned projection of a membership: the rate is
+// decrypted (the owner set it and design §4.2 allows it on this route only) and
+// the linked user's name is joined in. Name is empty until the invitation is
+// claimed.
+type Member struct {
+	ID              bson.ObjectID `json:"id"`
+	Email           string        `json:"email"`
+	Status          string        `json:"status"`
+	Name            string        `json:"name"`
+	HourlyRateCents *int64        `json:"hourly_rate_cents"`
 }
 
 // LatLng is both the JSON body of anchor_enc and the wire shape of an anchor.

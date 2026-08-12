@@ -57,6 +57,127 @@ func testStore(t *testing.T) *Store {
 	return NewStore(db, env)
 }
 
+func testEmployer(t *testing.T, s *Store) *Employer {
+	t.Helper()
+	e, err := s.Create(context.Background(), bson.NewObjectID(), "Acme", "Asia/Bangkok", LatLng{Lat: 1, Lng: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestAddMemberInvitesClaimsAndRejectsDuplicates(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	e := testEmployer(t, s)
+
+	invited, err := s.AddMember(ctx, e, "new@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invited.Status != statusInvited || invited.Name != "" || invited.HourlyRateCents != nil {
+		t.Fatalf("member = %+v, want a bare invitation", invited)
+	}
+
+	// An address that already has a user document is claimed on the spot.
+	joined := bson.NewObjectID()
+	if _, err := s.users.InsertOne(ctx, bson.M{"_id": joined, "email": "joined@example.com", "name": "Dao"}); err != nil {
+		t.Fatal(err)
+	}
+	active, err := s.AddMember(ctx, e, "joined@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Status != statusActive || active.Name != "Dao" {
+		t.Fatalf("member = %+v, want active and named", active)
+	}
+
+	for _, email := range []string{"new@example.com", "joined@example.com"} {
+		if _, err := s.AddMember(ctx, e, email); !errors.Is(err, ErrAlreadyMember) {
+			t.Fatalf("re-adding %s: err = %v, want ErrAlreadyMember", email, err)
+		}
+	}
+	// The same address under a different employer is a different membership.
+	if _, err := s.AddMember(ctx, testEmployer(t, s), "new@example.com"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoveThenReAddRevivesTheSameMembership(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	e := testEmployer(t, s)
+
+	added, err := s.AddMember(ctx, e, "back@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMemberRate(ctx, e, added.ID, 1800); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveMember(ctx, e.ID, added.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Removed rows are not writable and cannot be removed twice.
+	if err := s.RemoveMember(ctx, e.ID, added.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if err := s.SetMemberRate(ctx, e, added.ID, 1900); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+
+	revived, err := s.AddMember(ctx, e, "back@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same document, same employment relationship: the rate survives.
+	if revived.ID != added.ID || revived.Status != statusInvited {
+		t.Fatalf("revived = %+v, want %s invited", revived, added.ID.Hex())
+	}
+	if revived.HourlyRateCents == nil || *revived.HourlyRateCents != 1800 {
+		t.Fatalf("rate = %v, want 1800", revived.HourlyRateCents)
+	}
+	members, err := s.ListMembers(ctx, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("got %d members, want 1: %+v", len(members), members)
+	}
+}
+
+func TestSetMemberRateSealsWithEmployerDEK(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	e := testEmployer(t, s)
+	m, err := s.AddMember(ctx, e, "paid@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMemberRate(ctx, e, m.ID, 2200); err != nil {
+		t.Fatal(err)
+	}
+
+	var stored Membership
+	if err := s.memberships.FindOne(ctx, bson.M{"_id": m.ID}).Decode(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stored.HourlyRateCentsEnc, []byte("2200")) {
+		t.Fatalf("rate is not sealed: %q", stored.HourlyRateCentsEnc)
+	}
+	members, err := s.ListMembers(ctx, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0].HourlyRateCents == nil || *members[0].HourlyRateCents != 2200 {
+		t.Fatalf("members = %+v, want one at 2200", members)
+	}
+	// Another employer's membership id must not be writable through this employer.
+	if err := s.SetMemberRate(ctx, testEmployer(t, s), m.ID, 100); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateSealsAnchor(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)

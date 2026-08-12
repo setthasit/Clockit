@@ -3,6 +3,7 @@ package employer
 import (
 	"errors"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -32,6 +33,10 @@ func RegisterRoutes(e *echo.Echo, h *Handler, userStore *user.Store, authMW echo
 	e.POST("/v1/employers", h.Create, authMW, rateLimit, userMW)
 	e.GET("/v1/employers", h.List, authMW, userMW)
 	e.PATCH("/v1/employers/:id", h.Patch, authMW, rateLimit, userMW)
+	e.POST("/v1/employers/:id/members", h.AddMember, authMW, rateLimit, userMW)
+	e.GET("/v1/employers/:id/members", h.ListMembers, authMW, userMW)
+	e.PATCH("/v1/employers/:id/members/:mid", h.SetMemberRate, authMW, rateLimit, userMW)
+	e.DELETE("/v1/employers/:id/members/:mid", h.RemoveMember, authMW, rateLimit, userMW)
 }
 
 // view is the client projection of an employer: the sealed anchor is replaced
@@ -142,11 +147,9 @@ type patchRequest struct {
 }
 
 func (h *Handler) Patch(c echo.Context) error {
-	// A malformed id is answered like a foreign one: 404 either way, so the
-	// endpoint never confirms which employer ids exist.
-	id, err := bson.ObjectIDFromHex(c.Param("id"))
+	id, err := parseID(c, "id")
 	if err != nil {
-		return httpx.NotFound()
+		return err
 	}
 	var req patchRequest
 	if err := c.Bind(&req); err != nil {
@@ -178,11 +181,11 @@ func (h *Handler) Patch(c echo.Context) error {
 	ctx := c.Request().Context()
 	ownerID := user.CurrentUser(c).ID
 	if err := h.store.Update(ctx, id, ownerID, name, req.Timezone, anchor); err != nil {
-		return mapNotFound(err)
+		return mapStoreError(err)
 	}
 	e, err := h.store.GetOwned(ctx, id, ownerID)
 	if err != nil {
-		return mapNotFound(err)
+		return mapStoreError(err)
 	}
 	stored, err := h.store.DecryptAnchor(ctx, e)
 	if err != nil {
@@ -191,9 +194,125 @@ func (h *Handler) Patch(c echo.Context) error {
 	return c.JSON(http.StatusOK, echo.Map{"employer": newView(e, stored)})
 }
 
-func mapNotFound(err error) error {
-	if errors.Is(err, ErrNotFound) {
-		return httpx.NotFound()
+type addMemberRequest struct {
+	Email string `json:"email"`
+}
+
+func (h *Handler) AddMember(c echo.Context) error {
+	e, err := h.owned(c)
+	if err != nil {
+		return err
 	}
-	return err
+	var req addMemberRequest
+	if err := c.Bind(&req); err != nil {
+		return httpx.Invalid("malformed body")
+	}
+	email, err := cleanEmail(req.Email)
+	if err != nil {
+		return err
+	}
+	m, err := h.store.AddMember(c.Request().Context(), e, email)
+	if err != nil {
+		return mapStoreError(err)
+	}
+	return c.JSON(http.StatusCreated, echo.Map{"member": m})
+}
+
+func (h *Handler) ListMembers(c echo.Context) error {
+	e, err := h.owned(c)
+	if err != nil {
+		return err
+	}
+	members, err := h.store.ListMembers(c.Request().Context(), e)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, echo.Map{"members": members})
+}
+
+type memberRateRequest struct {
+	// Pointer: a missing rate is a malformed request, not a request to zero it.
+	HourlyRateCents *int64 `json:"hourly_rate_cents"`
+}
+
+func (h *Handler) SetMemberRate(c echo.Context) error {
+	e, err := h.owned(c)
+	if err != nil {
+		return err
+	}
+	mid, err := parseID(c, "mid")
+	if err != nil {
+		return err
+	}
+	var req memberRateRequest
+	if err := c.Bind(&req); err != nil {
+		return httpx.Invalid("malformed body")
+	}
+	if req.HourlyRateCents == nil {
+		return httpx.Invalid("hourly_rate_cents is required")
+	}
+	if *req.HourlyRateCents < 0 {
+		return httpx.Invalid("hourly_rate_cents must not be negative")
+	}
+	if err := h.store.SetMemberRate(c.Request().Context(), e, mid, *req.HourlyRateCents); err != nil {
+		return mapStoreError(err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *Handler) RemoveMember(c echo.Context) error {
+	e, err := h.owned(c)
+	if err != nil {
+		return err
+	}
+	mid, err := parseID(c, "mid")
+	if err != nil {
+		return err
+	}
+	if err := h.store.RemoveMember(c.Request().Context(), e.ID, mid); err != nil {
+		return mapStoreError(err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func cleanEmail(raw string) (string, error) {
+	addr, err := mail.ParseAddress(strings.TrimSpace(raw))
+	if err != nil {
+		return "", httpx.Invalid("email must be a valid address")
+	}
+	return strings.ToLower(addr.Address), nil
+}
+
+// owned is the authorization gate every employer-scoped route runs first.
+func (h *Handler) owned(c echo.Context) (*Employer, error) {
+	id, err := parseID(c, "id")
+	if err != nil {
+		return nil, err
+	}
+	e, err := h.store.GetOwned(c.Request().Context(), id, user.CurrentUser(c).ID)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	return e, nil
+}
+
+// parseID answers a malformed id like a foreign one: 404 either way, so the
+// endpoint never confirms which ids exist.
+func parseID(c echo.Context, param string) (bson.ObjectID, error) {
+	id, err := bson.ObjectIDFromHex(c.Param(param))
+	if err != nil {
+		return bson.ObjectID{}, httpx.NotFound()
+	}
+	return id, nil
+}
+
+func mapStoreError(err error) error {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return httpx.NotFound()
+	case errors.Is(err, ErrAlreadyMember):
+		return httpx.AlreadyMember()
+	default:
+		return err
+	}
 }
