@@ -1,0 +1,25 @@
+shape: sequence_diagram
+
+emp: Employee
+app: "Mobile app"
+os: "OS location"
+api: "Go API"
+kms: "Cloud KMS"
+db: "Atlas"
+
+emp -> app: "tap Clock In"
+app -> os: "getCurrentPositionAsync(Highest)"
+os -> app: "fix {lat, lng, accuracy, mocked}"
+app -> app: "0 employers: personal clock-in, no popup\n>=1: bottom sheet (employers + distance, or Personal)"
+app -> api: "POST /v1/entries/clock-in\n{client_id, employer_id?, at, loc, mocked}"
+api -> api: "verify JWT (cached JWKS)"
+api -> api: "reject if: mocked, accuracy > 100m, stale > 5min,\nhaversine(anchor) > 1km (employer only)\nno employer: fix becomes anchor for clock-out"
+api -> kms: "unwrap tenant DEK (15 min cache)"
+kms -> api: "DEK"
+api -> db: "insert entry: loc AES-256-GCM,\npartial unique index = one open shift"
+db -> api: "ok"
+api -> app: "201 entry"
+app -> app: "start background task:\nlocation ping every 10 min while on shift"
+app -> api: "POST /v1/pings (batched, also on reconnect)"
+
+app."Offline: mutation stays in outbox (AsyncStorage), applied to local state,\nretried on reconnect; client_id unique index makes retries idempotent"

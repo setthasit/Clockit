@@ -1,0 +1,41 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.mobileprovision
+*.jks
+*.keystore
+credentials.json
+google-services.json
+GoogleService-Info.plist
+
+# Node (mobile/, web/)
+node_modules/
+dist/
+build/
+coverage/
+.expo/
+web-build/
+expo-env.d.ts
+*.tsbuildinfo
+
+# Go (backend/)
+backend/bin/
+*.out
+
+# OpenTofu (infra/)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.auto.tfvars.example
+tfplan
+crash.log

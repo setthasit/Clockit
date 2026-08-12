@@ -1,0 +1,31 @@
+# ClockIt
+
+> **Status: Work in progress** — currently in the design phase. No application code yet; the system design is under review.
+
+Employee clock-in/clock-out with location validation. Employees clock in from a mobile app (with anti-mock-location checks and 1 km proximity validation against their employer's location); employers manage employees, view shifts on a calendar or table, and split daily tips by hours worked.
+
+![Architecture](docs/diagrams/architecture.svg)
+
+## Documentation
+
+- [System design](docs/design.md)
+- Diagrams: [architecture](docs/diagrams/architecture.svg) · [infrastructure](docs/diagrams/infra.svg) · [clock-in flow](docs/diagrams/clock-in-flow.svg)
+
+## Stack
+
+| Part | Tech |
+|---|---|
+| `mobile/` — employee app | React Native, Expo, Zustand, NativeWind, Auth0 |
+| `web/` — employer app | React 19, Astryx (StyleX), Vite, Auth0 |
+| `backend/` — API | Go, Echo, uber/fx, MongoDB, Valkey, KEK/DEK envelope encryption (Cloud KMS) |
+| `infra/` | GCP (GKE Autopilot, Cloud CDN, Cloud KMS), MongoDB Atlas (private endpoint), Tailscale (beta env), OpenTofu |
+
+## Roadmap
+
+- [x] System design
+- [ ] Infra bootstrap (VPC, GKE, Atlas + PSC, KMS, registry)
+- [ ] Backend MVP (auth, envelope crypto, clock-in/out + proximity, employers/members)
+- [ ] Mobile MVP (auth, clock screen, history, offline outbox)
+- [ ] Web MVP (onboarding, employees, calendar, table + tips)
+- [ ] Background pings + reports
+- [ ] Hardening (Play Integrity / App Attest, alerting, backup drill)

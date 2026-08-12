@@ -1,0 +1,49 @@
+direction: right
+
+mobile: "Employee mobile app\nExpo · Zustand · NativeWind" {
+  style.fill: "#00286E"
+  style.font-color: "#FFFFFF"
+}
+
+web: "Employer web app\nReact 19 · Astryx (StyleX)" {
+  style.fill: "#00286E"
+  style.font-color: "#FFFFFF"
+}
+
+auth0: "Auth0\nGoogle / Apple / Facebook /\nusername+password\n(Universal Login, JWT RS256)"
+
+gcp: "GCP" {
+  alb: "Global HTTPS LB\napi.* -> GKE\napp.* -> bucket (+SPA 404 rewrite)"
+  webstatic: "GCS bucket + Cloud CDN\n(prod web build)"
+  gke: "GKE Autopilot" {
+    prodns: "ns: prod" {
+      api: "Go API\nEcho · fx"
+      valkey: "Valkey\n(rate limit)"
+      api -> valkey
+    }
+    betans: "ns: beta" {
+      api: "Go API"
+      valkey: Valkey
+      nginx: "nginx\n(beta web)"
+      api -> valkey
+    }
+  }
+  kms: "Cloud KMS\nKEK per env\n(envelope encryption)"
+}
+
+atlas: "MongoDB Atlas M10\nprivate endpoint (PSC)\nclockit_beta / clockit_prod"
+tailnet: "Tailscale tailnet\n(beta access only)"
+
+mobile -> auth0: login
+web -> auth0: login
+mobile -> gcp.alb: "HTTPS + JWT (prod)"
+web -> gcp.alb: "HTTPS + JWT (prod)"
+gcp.alb -> gcp.webstatic: "app.*"
+gcp.alb -> gcp.gke.prodns.api: "api.*"
+mobile -> tailnet: "beta builds" {style.stroke-dash: 3}
+tailnet -> gcp.gke.betans.api {style.stroke-dash: 3}
+tailnet -> gcp.gke.betans.nginx {style.stroke-dash: 3}
+gcp.gke.prodns.api -> gcp.kms: "wrap/unwrap DEK"
+gcp.gke.betans.api -> gcp.kms: "wrap/unwrap DEK"
+gcp.gke.prodns.api -> atlas: PSC
+gcp.gke.betans.api -> atlas: PSC

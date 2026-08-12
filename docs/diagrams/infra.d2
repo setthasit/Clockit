@@ -1,0 +1,49 @@
+direction: right
+
+pub: "Public users\n(prod)"
+tailnet: "Tailscale tailnet\n(beta testers +\nteam devices)"
+gha: "GitHub Actions\nkeyless (WIF)\ntofu plan/apply · build · deploy"
+
+gcp: "GCP project · single region" {
+  dns: "Cloud DNS\napp.* / api.*"
+  alb: "Global HTTPS LB\nmanaged certs · Cloud Armor\ncustom error: 404 -> index.html (200)"
+  bucket: "GCS bucket + Cloud CDN\nprod web (immutable assets)"
+  ar: "Artifact Registry"
+  sm: "Secret Manager\nAtlas/Auth0/Tailscale creds"
+  kms: "Cloud KMS keyring\nkek-beta · kek-prod\nIAM per env KSA"
+
+  vpc: "VPC" {
+    nat: "Cloud NAT\n(egress: Auth0 JWKS,\nTailscale control)"
+    psc: "PSC endpoint\n(port-mapped)"
+    gke: "GKE Autopilot · private nodes · Workload Identity" {
+      prodns: "ns: prod" {
+        api: "api ×2 + HPA"
+        valkey: "valkey"
+      }
+      betans: "ns: beta" {
+        api: "api ×1"
+        valkey: "valkey"
+        nginx: "nginx (web)"
+        tsop: "tailscale operator"
+      }
+    }
+  }
+}
+
+atlas: "MongoDB Atlas\nM10 · no public access\nclockit_beta / clockit_prod\ncloud backup"
+
+pub -> gcp.alb: "app.* / api.*"
+gcp.dns -> gcp.alb
+gcp.alb -> gcp.bucket: "app.*"
+gcp.alb -> gcp.vpc.gke.prodns.api: "api.* (Gateway API)"
+tailnet -> gcp.vpc.gke.betans.api: "MagicDNS" {style.stroke-dash: 3}
+tailnet -> gcp.vpc.gke.betans.nginx: "beta web" {style.stroke-dash: 3}
+gcp.vpc.gke.betans.tsop -> tailnet: "registers devices" {style.stroke-dash: 3}
+gcp.vpc.gke.prodns.api -> gcp.vpc.psc
+gcp.vpc.gke.betans.api -> gcp.vpc.psc
+gcp.vpc.psc -> atlas: "private"
+gcp.vpc.gke.prodns.api -> gcp.kms
+gcp.vpc.gke.betans.api -> gcp.kms
+gha -> gcp.ar: "push images"
+gha -> gcp.vpc.gke: "kubectl apply -k\n(beta on main, prod on tag)"
+gha -> gcp.bucket: "web deploy + CDN invalidate"
