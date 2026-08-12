@@ -56,11 +56,11 @@ func cleanName(raw string) (string, error) {
 	return name, nil
 }
 
-// checkTimezone rejects "" explicitly: LoadLocation resolves it to UTC, which
-// would silently accept a client that forgot the field.
 func checkTimezone(tz string) error {
-	if tz == "" {
-		return httpx.Invalid("timezone must not be empty")
+	// LoadLocation resolves "" to UTC and "Local" to the server's zone; neither is
+	// an IANA name a client can have meant.
+	if tz == "" || tz == "Local" {
+		return httpx.Invalid("timezone must be an IANA name")
 	}
 	if _, err := time.LoadLocation(tz); err != nil {
 		return httpx.Invalid("unknown timezone")
@@ -68,22 +68,30 @@ func checkTimezone(tz string) error {
 	return nil
 }
 
-func checkAnchor(a LatLng) error {
-	if a.Lat < -90 || a.Lat > 90 {
-		return httpx.Invalid("lat must be within [-90, 90]")
+type anchorBody struct {
+	Lat *float64 `json:"lat"`
+	Lng *float64 `json:"lng"`
+}
+
+// Pointers: an omitted coordinate must not default to 0 — on PATCH that would
+// silently overwrite the stored one.
+func (a *anchorBody) latLng() (LatLng, error) {
+	if a == nil || a.Lat == nil || a.Lng == nil {
+		return LatLng{}, httpx.Invalid("anchor requires lat and lng")
 	}
-	if a.Lng < -180 || a.Lng > 180 {
-		return httpx.Invalid("lng must be within [-180, 180]")
+	if *a.Lat < -90 || *a.Lat > 90 {
+		return LatLng{}, httpx.Invalid("lat must be within [-90, 90]")
 	}
-	return nil
+	if *a.Lng < -180 || *a.Lng > 180 {
+		return LatLng{}, httpx.Invalid("lng must be within [-180, 180]")
+	}
+	return LatLng{Lat: *a.Lat, Lng: *a.Lng}, nil
 }
 
 type createRequest struct {
-	Name string `json:"name"`
-	// Pointer so a missing anchor is rejected instead of silently anchoring the
-	// employer at (0, 0).
-	Anchor   *LatLng `json:"anchor"`
-	Timezone string  `json:"timezone"`
+	Name     string      `json:"name"`
+	Anchor   *anchorBody `json:"anchor"`
+	Timezone string      `json:"timezone"`
 }
 
 func (h *Handler) Create(c echo.Context) error {
@@ -98,18 +106,16 @@ func (h *Handler) Create(c echo.Context) error {
 	if err := checkTimezone(req.Timezone); err != nil {
 		return err
 	}
-	if req.Anchor == nil {
-		return httpx.Invalid("anchor is required")
-	}
-	if err := checkAnchor(*req.Anchor); err != nil {
-		return err
-	}
-
-	e, err := h.store.Create(c.Request().Context(), user.CurrentUser(c).ID, name, req.Timezone, *req.Anchor)
+	anchor, err := req.Anchor.latLng()
 	if err != nil {
 		return err
 	}
-	return c.JSON(http.StatusCreated, echo.Map{"employer": newView(e, *req.Anchor)})
+
+	e, err := h.store.Create(c.Request().Context(), user.CurrentUser(c).ID, name, req.Timezone, anchor)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusCreated, echo.Map{"employer": newView(e, anchor)})
 }
 
 func (h *Handler) List(c echo.Context) error {
@@ -130,9 +136,9 @@ func (h *Handler) List(c echo.Context) error {
 }
 
 type patchRequest struct {
-	Name     *string `json:"name"`
-	Anchor   *LatLng `json:"anchor"`
-	Timezone *string `json:"timezone"`
+	Name     *string     `json:"name"`
+	Anchor   *anchorBody `json:"anchor"`
+	Timezone *string     `json:"timezone"`
 }
 
 func (h *Handler) Patch(c echo.Context) error {
@@ -160,26 +166,29 @@ func (h *Handler) Patch(c echo.Context) error {
 			return err
 		}
 	}
+	var anchor *LatLng
 	if req.Anchor != nil {
-		if err := checkAnchor(*req.Anchor); err != nil {
+		parsed, err := req.Anchor.latLng()
+		if err != nil {
 			return err
 		}
+		anchor = &parsed
 	}
 
 	ctx := c.Request().Context()
 	ownerID := user.CurrentUser(c).ID
-	if err := h.store.Update(ctx, id, ownerID, name, req.Timezone, req.Anchor); err != nil {
+	if err := h.store.Update(ctx, id, ownerID, name, req.Timezone, anchor); err != nil {
 		return mapNotFound(err)
 	}
 	e, err := h.store.GetOwned(ctx, id, ownerID)
 	if err != nil {
 		return mapNotFound(err)
 	}
-	anchor, err := h.store.DecryptAnchor(ctx, e)
+	stored, err := h.store.DecryptAnchor(ctx, e)
 	if err != nil {
 		return err
 	}
-	return c.JSON(http.StatusOK, echo.Map{"employer": newView(e, anchor)})
+	return c.JSON(http.StatusOK, echo.Map{"employer": newView(e, stored)})
 }
 
 func mapNotFound(err error) error {

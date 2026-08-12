@@ -7,6 +7,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/setthasit/clockit/backend/internal/crypto"
 )
@@ -53,7 +54,7 @@ func (s *Store) Create(ctx context.Context, ownerUserID bson.ObjectID, name, tim
 }
 
 func (s *Store) ListByOwner(ctx context.Context, ownerUserID bson.ObjectID) ([]Employer, error) {
-	cur, err := s.employers.Find(ctx, bson.M{"owner_user_id": ownerUserID})
+	cur, err := s.employers.Find(ctx, bson.M{"owner_user_id": ownerUserID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
