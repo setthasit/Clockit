@@ -40,7 +40,14 @@ type testAPI struct {
 // newTestAPI wires the real route stack — httpx.NewEcho, the auth middleware
 // against a local signing key, Mongo and Valkey — so the tests exercise
 // middleware order and the error contract, not a hand-assembled subset.
+// High enough that no test trips the limiter; the limiter itself is covered in
+// valkeyx.
 func newTestAPI(t *testing.T) *testAPI {
+	t.Helper()
+	return newTestAPIWithRateLimit(t, 1000)
+}
+
+func newTestAPIWithRateLimit(t *testing.T, perMin int) *testAPI {
 	t.Helper()
 	addr := os.Getenv("VALKEY_ADDR")
 	if addr == "" {
@@ -59,11 +66,9 @@ func newTestAPI(t *testing.T) *testAPI {
 		t.Fatal(err)
 	}
 	cfg := config.Config{
-		Auth0Domain:   testAuth0Domain,
-		Auth0Audience: testAuth0Audience,
-		// High enough that no test trips the limiter; the limiter itself is
-		// covered in valkeyx.
-		RateLimitPerMin: 1000,
+		Auth0Domain:     testAuth0Domain,
+		Auth0Audience:   testAuth0Audience,
+		RateLimitPerMin: perMin,
 	}
 	authMW := auth.NewMiddlewareWithKeyfunc(cfg, func(*jwt.Token) (any, error) { return &key.PublicKey, nil })
 	e := httpx.NewEcho(cfg)
@@ -203,15 +208,20 @@ func TestGetMeCreatesUserOnceUnderParallelRequests(t *testing.T) {
 	sub := uniqueSub("jit")
 	tok := api.token(t, auth.Identity{Sub: sub, Email: "JIT@Example.com"})
 
+	// Without the barrier the first goroutine can finish before the second is
+	// scheduled, and the test would pass without ever racing.
+	start := make(chan struct{})
 	var wg sync.WaitGroup
 	recs := make([]*httptest.ResponseRecorder, 2)
 	for i := range recs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-start
 			recs[i] = api.do(http.MethodGet, "/v1/me", tok, "")
 		}()
 	}
+	close(start)
 	wg.Wait()
 
 	first := decodeMe(t, recs[0])
@@ -344,6 +354,44 @@ func TestPatchMeRejectsInvalidBodies(t *testing.T) {
 			rec := api.do(http.MethodPatch, "/v1/me", tok, body)
 			assertErrorCode(t, rec, http.StatusBadRequest, "INVALID_ARGUMENT")
 		})
+	}
+}
+
+// Pins the middleware order auth -> rate limit -> user: a refused request must
+// cost neither the JIT provisioning write nor the handler's update.
+func TestPatchMeIsRateLimitedBeforeUserProvisioning(t *testing.T) {
+	api := newTestAPIWithRateLimit(t, 1)
+	sub := uniqueSub("rl")
+	tok := api.token(t, auth.Identity{Sub: sub, Email: "rl@example.com"})
+
+	if rec := api.do(http.MethodPatch, "/v1/me", tok, `{"name":"Ada"}`); rec.Code != http.StatusOK {
+		t.Fatalf("first request status = %d: %s", rec.Code, rec.Body)
+	}
+	assertErrorCode(t, api.do(http.MethodPatch, "/v1/me", tok, `{"name":"Bob"}`),
+		http.StatusTooManyRequests, "RATE_LIMITED")
+
+	var stored User
+	if err := api.store.users.FindOne(context.Background(), bson.M{"auth0_sub": sub}).Decode(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Name != "Ada" {
+		t.Fatalf("name = %q, want Ada — the refused request reached the handler", stored.Name)
+	}
+
+	// A budget of zero makes the very first request the refused one, which is
+	// the only way to observe that provisioning never ran.
+	strict := newTestAPIWithRateLimit(t, 0)
+	unseen := uniqueSub("rl-strict")
+	assertErrorCode(t, strict.do(http.MethodPatch, "/v1/me",
+		strict.token(t, auth.Identity{Sub: unseen, Email: "strict@example.com"}), `{"name":"Zoe"}`),
+		http.StatusTooManyRequests, "RATE_LIMITED")
+
+	count, err := strict.store.users.CountDocuments(context.Background(), bson.M{"auth0_sub": unseen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("got %d user docs, want 0: provisioning ran before the rate limit", count)
 	}
 }
 
