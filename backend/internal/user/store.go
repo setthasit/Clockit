@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ var ErrEmailTaken = errors.New("email already registered to another account")
 type Store struct {
 	users       *mongo.Collection
 	memberships *mongo.Collection
+	employers   *mongo.Collection
 	env         *crypto.Envelope
 }
 
@@ -29,6 +31,7 @@ func NewStore(db *mongo.Database, env *crypto.Envelope) *Store {
 	return &Store{
 		users:       db.Collection("users"),
 		memberships: db.Collection("memberships"),
+		employers:   db.Collection("employers"),
 		env:         env,
 	}
 }
@@ -64,6 +67,105 @@ func (s *Store) Update(ctx context.Context, id bson.ObjectID, name *string, phon
 	}
 	_, err := s.users.UpdateByID(ctx, id, bson.M{"$set": set})
 	return err
+}
+
+// employerDoc is the read-only slice of the employers collection /v1/me needs.
+//
+// ponytail: the employer join lives in the user package until a second package
+// needs it; the employer package owns every write to that collection.
+type employerDoc struct {
+	ID         bson.ObjectID `bson:"_id"`
+	Name       string        `bson:"name"`
+	Timezone   string        `bson:"timezone"`
+	AnchorEnc  []byte        `bson:"anchor_enc"`
+	DEKWrapped []byte        `bson:"dek_wrapped"`
+}
+
+type membershipDoc struct {
+	ID         bson.ObjectID `bson:"_id"`
+	EmployerID bson.ObjectID `bson:"employer_id"`
+	Status     string        `bson:"status"`
+}
+
+// ActiveMemberships lists the employers the user may clock in for. Invited rows
+// are not returned (nothing is bound to the user yet) and removed rows would be
+// rejected at clock-in anyway.
+func (s *Store) ActiveMemberships(ctx context.Context, userID bson.ObjectID) ([]Membership, error) {
+	var docs []membershipDoc
+	cur, err := s.memberships.Find(ctx, bson.M{"user_id": userID, "status": "active"})
+	if err != nil {
+		return nil, err
+	}
+	if err := cur.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+
+	employers, err := s.employersByID(ctx, docs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Membership, 0, len(docs))
+	for _, d := range docs {
+		e, ok := employers[d.EmployerID]
+		if !ok {
+			continue
+		}
+		anchor, err := s.openAnchor(ctx, e)
+		// One employer with an unreadable anchor must not blank out the whole
+		// profile screen; the membership is dropped and the failure logged.
+		if err != nil {
+			slog.ErrorContext(ctx, "anchor decrypt failed, skipping membership",
+				"employer_id", e.ID.Hex(), "error", err)
+			continue
+		}
+		out = append(out, Membership{
+			ID:     d.ID,
+			Status: d.Status,
+			Employer: Employer{
+				ID:       e.ID,
+				Name:     e.Name,
+				Anchor:   anchor,
+				Timezone: e.Timezone,
+			},
+		})
+	}
+	return out, nil
+}
+
+func (s *Store) employersByID(ctx context.Context, docs []membershipDoc) (map[bson.ObjectID]employerDoc, error) {
+	ids := make([]bson.ObjectID, 0, len(docs))
+	for _, d := range docs {
+		ids = append(ids, d.EmployerID)
+	}
+	out := make(map[bson.ObjectID]employerDoc, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	cur, err := s.employers.Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	if err != nil {
+		return nil, err
+	}
+	var found []employerDoc
+	if err := cur.All(ctx, &found); err != nil {
+		return nil, err
+	}
+	for _, e := range found {
+		out[e.ID] = e
+	}
+	return out, nil
+}
+
+func (s *Store) openAnchor(ctx context.Context, e employerDoc) (Anchor, error) {
+	dek, err := s.env.UnwrapDEK(ctx, e.ID.Hex(), e.DEKWrapped)
+	if err != nil {
+		return Anchor{}, err
+	}
+	var anchor Anchor
+	if err := crypto.OpenJSON(dek, e.AnchorEnc, &anchor); err != nil {
+		return Anchor{}, err
+	}
+	return anchor, nil
 }
 
 // findOrInsert reads first so the steady-state path costs one query and no KMS

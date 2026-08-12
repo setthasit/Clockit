@@ -211,6 +211,69 @@ func assertMembership(t *testing.T, s *Store, id bson.ObjectID, wantStatus strin
 	}
 }
 
+func TestActiveMembershipsJoinsEmployersAndDecryptsAnchor(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	u, err := s.GetOrCreate(ctx, auth.Identity{Sub: "auth0|m", Email: "m@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	insertEmployer := func(name string, anchorEnc []byte, wrapped []byte) bson.ObjectID {
+		t.Helper()
+		id := bson.NewObjectID()
+		doc := bson.M{"_id": id, "name": name, "timezone": "Asia/Bangkok",
+			"anchor_enc": anchorEnc, "dek_wrapped": wrapped}
+		if _, err := s.employers.InsertOne(ctx, doc); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	sealedEmployer := func(name string, anchor Anchor) bson.ObjectID {
+		t.Helper()
+		dek, wrapped, err := s.env.NewDEK(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		enc, err := crypto.SealJSON(dek, anchor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return insertEmployer(name, enc, wrapped)
+	}
+	insertMembership := func(employerID bson.ObjectID, status string, userID any) {
+		t.Helper()
+		doc := bson.M{"_id": bson.NewObjectID(), "employer_id": employerID,
+			"email": "m@example.com", "status": status, "user_id": userID}
+		if _, err := s.memberships.InsertOne(ctx, doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	anchor := Anchor{Lat: 13.7563, Lng: 100.5018}
+	insertMembership(sealedEmployer("Acme", anchor), "active", u.ID)
+	insertMembership(sealedEmployer("Gone", anchor), "removed", u.ID)
+	insertMembership(sealedEmployer("Pending", anchor), "invited", nil)
+	// Unreadable anchor: the row is dropped, the rest of the profile survives.
+	_, wrapped, err := s.env.NewDEK(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertMembership(insertEmployer("Corrupt", []byte("not a ciphertext"), wrapped), "active", u.ID)
+
+	got, err := s.ActiveMemberships(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d memberships, want 1: %+v", len(got), got)
+	}
+	want := Employer{ID: got[0].Employer.ID, Name: "Acme", Anchor: anchor, Timezone: "Asia/Bangkok"}
+	if got[0].Status != "active" || got[0].Employer != want {
+		t.Fatalf("got %+v, want status active and %+v", got[0], want)
+	}
+}
+
 func TestUpdate(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
