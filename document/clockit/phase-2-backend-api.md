@@ -30,9 +30,9 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 3.2: `POST/GET/PATCH /v1/employers`
   - [x] 3.3: Membership endpoints (add/list/rate/remove)
   - [x] 3.4: Tests
-- [ ] Task 4: Entry domain — geo rules
-  - [ ] 4.1: `geo.go` (haversine + fix validation)
-  - [ ] 4.2: Geo unit tests
+- [x] Task 4: Entry domain — geo rules
+  - [x] 4.1: `geo.go` (haversine + fix validation)
+  - [x] 4.2: Geo unit tests
 - [ ] Task 5: Entry domain — endpoints
   - [ ] 5.1: Clock-in
   - [ ] 5.2: Clock-out
