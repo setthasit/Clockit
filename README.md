@@ -1,6 +1,10 @@
 # ClockIt
 
 > **Status: Work in progress** — currently in the design phase. No application code yet; the system design is under review.
+>
+> This repository is the MVP/reference implementation; it is not the production product.
+>
+> Built with AI (design, code, and infrastructure developed with AI assistance).
 
 Employee clock-in/clock-out with location validation. Employees clock in from a mobile app (with anti-mock-location checks and 1 km proximity validation against their employer's location); employers manage employees, view shifts on a calendar or table, and split daily tips by hours worked.
 
@@ -29,3 +33,7 @@ Employee clock-in/clock-out with location validation. Employees clock in from a 
 - [ ] Web MVP (onboarding, employees, calendar, table + tips)
 - [ ] Background pings + reports
 - [ ] Hardening (Play Integrity / App Attest, alerting, backup drill)
+
+## License
+
+[MIT](LICENSE)
