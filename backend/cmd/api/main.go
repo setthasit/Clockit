@@ -15,6 +15,6 @@ import (
 func main() {
 	fx.New(
 		fx.Provide(config.Load, httpx.NewEcho, mongox.New, valkeyx.New, crypto.NewEnvelope, auth.NewMiddleware),
-		fx.Invoke(otelx.Setup, httpx.Start),
+		fx.Invoke(otelx.Setup, mongox.RegisterIndexes, httpx.Start),
 	).Run()
 }

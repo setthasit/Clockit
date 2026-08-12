@@ -44,7 +44,3 @@ func ErrorHandler(err error, c echo.Context) {
 func statusCode(status int) string {
 	return strings.ToUpper(strings.ReplaceAll(http.StatusText(status), " ", "_"))
 }
-
-func Unauthenticated() *AppError {
-	return &AppError{Status: http.StatusUnauthorized, Code: "UNAUTHENTICATED", Message: "invalid or missing credentials"}
-}
