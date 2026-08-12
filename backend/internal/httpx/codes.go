@@ -65,6 +65,10 @@ func AlreadyMember() *AppError {
 	return &AppError{Status: http.StatusConflict, Code: "ALREADY_MEMBER", Message: "already a member of this employer"}
 }
 
+func EmailTaken() *AppError {
+	return &AppError{Status: http.StatusConflict, Code: "EMAIL_TAKEN", Message: "email already registered to another account"}
+}
+
 func NotMember() *AppError {
 	return &AppError{Status: http.StatusForbidden, Code: "NOT_MEMBER", Message: "not a member of this employer"}
 }

@@ -1,9 +1,11 @@
 package user
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"github.com/setthasit/clockit/backend/internal/auth"
 	"github.com/setthasit/clockit/backend/internal/config"
 	"github.com/setthasit/clockit/backend/internal/crypto"
+	"github.com/setthasit/clockit/backend/internal/mongox"
 )
 
 func testStore(t *testing.T) *Store {
@@ -50,33 +53,27 @@ func testStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Real production constraints, not a hand-picked subset: the unique email
+	// index is what makes the second-subject conflict reachable.
+	if err := mongox.EnsureIndexes(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
 	return NewStore(db, env)
 }
 
 func TestGetOrCreateIsIdempotentUnderRace(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
-	if _, err := s.users.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "auth0_sub", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	}); err != nil {
-		t.Fatal(err)
-	}
 	ident := auth.Identity{Sub: "auth0|race", Email: "Race@Example.com"}
 
 	var wg sync.WaitGroup
-	ids := make([]bson.ObjectID, 4)
+	got := make([]*User, 4)
 	errs := make([]error, 4)
-	for i := range ids {
+	for i := range got {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			u, err := s.GetOrCreate(ctx, ident)
-			if err != nil {
-				errs[i] = err
-				return
-			}
-			ids[i] = u.ID
+			got[i], errs[i] = s.GetOrCreate(ctx, ident)
 		}()
 	}
 	wg.Wait()
@@ -86,8 +83,10 @@ func TestGetOrCreateIsIdempotentUnderRace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, id := range ids {
-		if id != ids[0] {
+	ids := make([]bson.ObjectID, len(got))
+	for i, u := range got {
+		ids[i] = u.ID
+		if u.ID != got[0].ID {
 			t.Fatalf("got differing user ids %v", ids)
 		}
 	}
@@ -108,6 +107,44 @@ func TestGetOrCreateIsIdempotentUnderRace(t *testing.T) {
 	}
 	if len(stored.DEKWrapped) == 0 {
 		t.Fatal("wrapped DEK not stored")
+	}
+	// Losers of the race mint a DEK that is never persisted; returning it would
+	// encrypt data under a key nothing can unwrap.
+	for i, u := range got {
+		if !bytes.Equal(u.DEKWrapped, stored.DEKWrapped) {
+			t.Fatalf("caller %d returned a DEK that is not the stored one", i)
+		}
+	}
+}
+
+func TestGetOrCreateRejectsEmailOwnedByAnotherSubject(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	first, err := s.GetOrCreate(ctx, auth.Identity{Sub: "auth0|google", Email: "dup@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Same person, second Auth0 connection: no account linking, so the email
+	// unique index — not auth0_sub — is what rejects the insert.
+	_, err = s.GetOrCreate(ctx, auth.Identity{Sub: "auth0|password", Email: "Dup@Example.com"})
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("err = %v, want ErrEmailTaken", err)
+	}
+
+	count, err := s.users.CountDocuments(ctx, bson.M{"email": "dup@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("got %d user docs, want 1", count)
+	}
+	var stored User
+	if err := s.users.FindOne(ctx, bson.M{"email": "dup@example.com"}).Decode(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.ID != first.ID || stored.Auth0Sub != "auth0|google" {
+		t.Fatalf("existing user was modified: %+v", stored)
 	}
 }
 

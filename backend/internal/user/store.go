@@ -14,6 +14,11 @@ import (
 	"github.com/setthasit/clockit/backend/internal/crypto"
 )
 
+// ErrEmailTaken means the address is already registered under a different
+// auth0_sub. Auth0 has no account linking across our connections, so the same
+// person signing in with a second connection lands here.
+var ErrEmailTaken = errors.New("email already registered to another account")
+
 type Store struct {
 	users       *mongo.Collection
 	memberships *mongo.Collection
@@ -91,10 +96,15 @@ func (s *Store) findOrInsert(ctx context.Context, sub, email string) (*User, err
 		bson.M{"$setOnInsert": insert},
 		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
 	).Decode(&u)
-	// Concurrent upserts against a unique index can surface a duplicate key
-	// error instead of matching; the winner's document is there, so re-read it.
+	// A duplicate key here is either auth0_sub (lost the insert race, the
+	// winner's document is there to re-read) or email (another subject owns the
+	// address). The raw E11000 must not escape: it embeds the email and errors
+	// are recorded on traces.
 	if mongo.IsDuplicateKeyError(err) {
 		err = s.users.FindOne(ctx, bson.M{"auth0_sub": sub}).Decode(&u)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			err = ErrEmailTaken
+		}
 	}
 	if err != nil {
 		return nil, err
