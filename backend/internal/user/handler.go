@@ -20,18 +20,19 @@ const contextKey = "clockit.user"
 
 type Handler struct {
 	store *Store
-	env   *crypto.Envelope
 }
 
-func NewHandler(store *Store, env *crypto.Envelope) *Handler {
-	return &Handler{store: store, env: env}
+func NewHandler(store *Store) *Handler {
+	return &Handler{store: store}
 }
 
-func RegisterRoutes(e *echo.Echo, h *Handler, store *Store, authMW echo.MiddlewareFunc, vk valkey.Client, cfg config.Config) {
-	userMW := Middleware(store)
+func RegisterRoutes(e *echo.Echo, h *Handler, authMW echo.MiddlewareFunc, vk valkey.Client, cfg config.Config) {
+	userMW := Middleware(h.store)
 	rateLimit := valkeyx.RateLimit(vk, cfg)
 	e.GET("/v1/me", h.GetMe, authMW, userMW)
-	e.PATCH("/v1/me", h.PatchMe, authMW, userMW, rateLimit)
+	// Rate limit before the user middleware: it only needs the identity, and a
+	// rejected request must not pay for GetOrCreate's reads and invitation write.
+	e.PATCH("/v1/me", h.PatchMe, authMW, rateLimit, userMW)
 }
 
 // Middleware resolves the authenticated identity to a user document, creating
@@ -109,7 +110,7 @@ func (h *Handler) PatchMe(c echo.Context) error {
 		if phone == "" {
 			return httpx.Invalid("phone must not be empty")
 		}
-		dek, err := h.env.UnwrapDEK(ctx, u.ID.Hex(), u.DEKWrapped)
+		dek, err := h.store.env.UnwrapDEK(ctx, u.ID.Hex(), u.DEKWrapped)
 		if err != nil {
 			return err
 		}

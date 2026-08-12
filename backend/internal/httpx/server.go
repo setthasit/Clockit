@@ -18,6 +18,7 @@ func NewEcho(cfg config.Config) *echo.Echo {
 	e.HideBanner = true
 	e.HidePort = true
 	e.Use(middleware.Recover())
+	e.Use(middleware.BodyLimit("1M"))
 	e.Use(otelecho.Middleware("clockit-api")) // traces + http metrics
 	e.HTTPErrorHandler = ErrorHandler
 	e.GET("/healthz", func(c echo.Context) error { return c.NoContent(http.StatusOK) })
