@@ -33,13 +33,13 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
 - [x] Task 4: Entry domain — geo rules
   - [x] 4.1: `geo.go` (haversine + fix validation)
   - [x] 4.2: Geo unit tests
-- [ ] Task 5: Entry domain — endpoints
+- [x] Task 5: Entry domain — endpoints
   - [x] 5.1: Clock-in
   - [x] 5.2: Clock-out
   - [x] 5.3: List + assign-employer
   - [x] 5.4: Pings (batch)
   - [x] 5.5: Employer entries view
-  - [ ] 5.6: Tests
+  - [x] 5.6: Tests
 - [ ] Task 6: Tip domain
   - [ ] 6.1: `split.go` (largest-remainder split) + unit tests
   - [ ] 6.2: Tips PUT/GET + report endpoint
