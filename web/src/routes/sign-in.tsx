@@ -10,7 +10,7 @@ import {Heading, Text} from '@astryxdesign/core/Text';
 export function SignInRoute() {
   const {isLoading, isAuthenticated, error, loginWithRedirect} = useAuth0();
 
-  // The guard puts the path the user asked for in location state; the SDK's default
+  // The guard puts the path the user asked for in location state; main.tsx's
   // onRedirectCallback navigates to appState.returnTo once Auth0 comes back.
   const {state} = useLocation();
   const returnTo = (state as {returnTo?: string} | null)?.returnTo ?? '/calendar';

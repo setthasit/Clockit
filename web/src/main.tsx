@@ -12,9 +12,10 @@ import './clockit.css';
 // address bar without telling react-router: the data router still believes it is at '/',
 // renders the index route, and that route's <Navigate to="/calendar"/> overwrites the deep
 // link a tick later. Navigating through the router keeps URL and router state in one place,
-// so the returnTo survives. Auth0 redirects back to the origin, so createBrowserRouter has
-// already run .initialize() by the time this fires — router.navigate() outside React is
-// exactly what a data router supports.
+// so the returnTo survives. router.navigate() outside React is what a data router supports,
+// and createBrowserRouter ran .initialize() at module evaluation, long before this fires.
+// Safe because no route has a loader/middleware/lazy: navigate() commits the location
+// synchronously. Add one and this becomes a race with the index route's <Navigate/>.
 // Replacing also drops ?code=/?state= from the URL, which the replaceState was doing as a
 // side effect and which must keep happening: a reload with them still present re-enters
 // handleRedirectCallback with no live transaction and fails with "Invalid state".

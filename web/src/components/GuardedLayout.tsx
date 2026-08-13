@@ -6,19 +6,13 @@ import {Button} from '@astryxdesign/core/Button';
 import {Center} from '@astryxdesign/core/Center';
 import {Spinner} from '@astryxdesign/core/Spinner';
 import {api, setApiAuth} from '../lib/api';
+import {AUTH_PARAMS_RE} from '../lib/auth';
 import {EMPLOYER_ID_KEY, EmployerContext, type EmployerState} from '../lib/employer';
 import type {Employer} from '../lib/types';
 
 // Stable empty list for the loading and error states, so the context memo below does not
 // rebuild on every render while the fetch is in flight.
 const NO_EMPLOYERS: Employer[] = [];
-
-// A failed login (bad audience, missing grant) comes back to '/' as ?error=&state= and
-// leaves this guard unauthenticated, so those params would ride into returnTo and be put
-// back in the address bar after the *next*, successful login. A reload there hits the SDK's
-// hasAuthParams() — (code|error) && state — with no live transaction and shows an "Invalid
-// state" banner over a perfectly good session. Nothing this app links to uses these names.
-const AUTH_PARAMS_RE = /[?&](code|state|error)=/;
 
 // Merely touching window.localStorage throws SecurityError where storage is blocked
 // (Chrome with all cookies blocked, some embedded webviews). Auth0 runs with
