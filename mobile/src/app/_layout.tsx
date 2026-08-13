@@ -99,7 +99,12 @@ function Gate() {
           // already dropped the local session, but Auth0 still holds the dead credentials, so
           // `user` stays set and every retry would 401 again. Dropping them locally flips this
           // gate to sign-in. Not clearSession() — the federated logout is task 8.1's.
-          clearCredentials().catch(() => setMeError(e.message));
+          // hasCreds has to be invalidated by hand: when `user` was already null (a renew that
+          // failed on launch), LOGOUT_COMPLETE changes nothing the keychain effect depends on, so
+          // it never re-runs and the gate would sit on a spinner forever.
+          clearCredentials()
+            .then(() => setHasCreds(false))
+            .catch(() => setMeError(e.message));
           return;
         }
         // Everything else keeps the session: an offline launch is not a signed-out user, and a
