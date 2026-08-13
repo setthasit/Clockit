@@ -134,6 +134,31 @@ func TestValidateFixRejections(t *testing.T) {
 	}
 }
 
+// Assign-employer judges position alone, so a fix that ValidateFix would reject
+// for being mocked, inaccurate or stale still counts as within the anchor.
+func TestWithinAnchor(t *testing.T) {
+	anchor := employer.LatLng{Lat: vanLat, Lng: vanLng}
+	cases := []struct {
+		name string
+		loc  employer.LatLng
+		want bool
+	}{
+		{"at the anchor", anchor, true},
+		{"exactly at the radius", employer.LatLng{Lat: vanLat + northOffset(1000), Lng: vanLng}, true},
+		{"rounds down to the radius", employer.LatLng{Lat: vanLat + northOffset(1000.4), Lng: vanLng}, true},
+		{"rounds up past the radius", employer.LatLng{Lat: vanLat + northOffset(1000.6), Lng: vanLng}, false},
+		{"far away", employer.LatLng{Lat: vanLat + northOffset(1800), Lng: vanLng}, false},
+		{"NaN coordinate", employer.LatLng{Lat: math.NaN(), Lng: vanLng}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := WithinAnchor(geoCfg(), tc.loc, anchor); got != tc.want {
+				t.Fatalf("WithinAnchor = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOutOfRangeCarriesDistanceDetails(t *testing.T) {
 	now := time.Now().UTC()
 	anchor := &employer.LatLng{Lat: vanLat, Lng: vanLng}

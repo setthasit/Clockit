@@ -38,6 +38,8 @@ func RegisterRoutes(e *echo.Echo, h *Handler, userStore *user.Store, authMW echo
 	rateLimit := valkeyx.RateLimit(vk, cfg)
 	e.POST("/v1/entries/clock-in", h.ClockIn, authMW, rateLimit, userMW)
 	e.POST("/v1/entries/clock-out", h.ClockOut, authMW, rateLimit, userMW)
+	e.GET("/v1/entries", h.List, authMW, userMW)
+	e.PATCH("/v1/entries/:id", h.Assign, authMW, rateLimit, userMW)
 }
 
 // clockPointView carries plaintext coordinates: this projection is only ever
@@ -228,6 +230,128 @@ func (h *Handler) ClockOut(c echo.Context) error {
 	}
 	// 200, not 201: closing a shift updates the entry created at clock-in.
 	return h.respond(c, http.StatusOK, u, e)
+}
+
+func (h *Handler) List(c echo.Context) error {
+	from, err := timeParam(c, "from")
+	if err != nil {
+		return err
+	}
+	to, err := timeParam(c, "to")
+	if err != nil {
+		return err
+	}
+	if from != nil && to != nil && to.Before(*from) {
+		return httpx.Invalid("from must not be after to")
+	}
+
+	ctx := c.Request().Context()
+	u := user.CurrentUser(c)
+	entries, err := h.store.List(ctx, u.ID, from, to)
+	if err != nil {
+		return err
+	}
+	views := make([]view, 0, len(entries))
+	for i := range entries {
+		v, err := h.view(ctx, u, &entries[i])
+		if err != nil {
+			return err
+		}
+		views = append(views, v)
+	}
+	return c.JSON(http.StatusOK, echo.Map{"entries": views})
+}
+
+// Assign attaches an employer to a personal entry after the fact. It never
+// rejects on location (design §4.5.5): a shift that happened outside the
+// employer's zone is still a real shift, it is just recorded unverified.
+func (h *Handler) Assign(c echo.Context) error {
+	entryID, err := bson.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		// A malformed id is answered like a foreign one, so the endpoint never
+		// confirms which ids exist.
+		return httpx.NotFound()
+	}
+	var req struct {
+		EmployerID *string `json:"employer_id"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return httpx.Invalid("malformed body")
+	}
+	employerID, err := parseEmployerID(req.EmployerID)
+	if err != nil {
+		return err
+	}
+	if employerID == nil {
+		return httpx.Invalid("employer_id is required")
+	}
+
+	ctx := c.Request().Context()
+	u := user.CurrentUser(c)
+	e, err := h.store.ByID(ctx, u.ID, entryID)
+	if err != nil {
+		return err
+	}
+	if e == nil {
+		return httpx.NotFound()
+	}
+	if e.EmployerID != nil {
+		return httpx.Invalid("entry already has an employer")
+	}
+
+	anchor, err := h.anchor(ctx, employerID, u.ID)
+	if err != nil {
+		return err
+	}
+	verified, err := h.withinAnchor(ctx, u, e, *anchor)
+	if err != nil {
+		return err
+	}
+
+	assigned, err := h.store.Assign(ctx, e, *employerID, verified)
+	if errors.Is(err, ErrAlreadyAssigned) {
+		return httpx.Invalid("entry already has an employer")
+	}
+	if err != nil {
+		return err
+	}
+	return h.respond(c, http.StatusOK, u, assigned)
+}
+
+// withinAnchor re-measures the entry's fixes against an employer's centre.
+// Position only: mock, accuracy and skew were judged when the fix was captured,
+// and re-judging skew now would mark every past entry unverified.
+//
+// An open entry has only a clock-in to measure; its eventual clock-out is
+// validated against this same anchor, because employer_id is set by then.
+func (h *Handler) withinAnchor(ctx context.Context, u *user.User, e *Entry, anchor employer.LatLng) (bool, error) {
+	points := []*ClockPoint{&e.ClockIn}
+	if e.ClockOut != nil {
+		points = append(points, e.ClockOut)
+	}
+	for _, p := range points {
+		loc, err := h.store.openLoc(ctx, u, p.LocEnc)
+		if err != nil {
+			return false, err
+		}
+		if !WithinAnchor(h.cfg, loc, anchor) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// timeParam reads an optional RFC3339 range bound; absent means unbounded.
+func timeParam(c echo.Context, name string) (*time.Time, error) {
+	raw := c.QueryParam(name)
+	if raw == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, httpx.Invalid(name + " must be an RFC3339 timestamp")
+	}
+	return &t, nil
 }
 
 // closeAnchor measures an employer shift against the employer's centre and a

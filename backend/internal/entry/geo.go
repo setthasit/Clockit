@@ -43,15 +43,24 @@ func ValidateFix(cfg config.Config, now time.Time, f Fix, anchor *employer.LatLn
 	if skew := now.Sub(f.At); skew > cfg.MaxClockSkew || skew < -cfg.MaxClockSkew {
 		return httpx.StaleTimestamp()
 	}
-	if anchor != nil {
-		// Compared at whole-metre resolution, the same unit the client is told
-		// about: a fix on the radius must never be refused with "1000 m from
-		// anchor (limit 1000 m)", and sub-metre float noise is not a violation.
-		if d := haversineM(f.Lat, f.Lng, anchor.Lat, anchor.Lng); math.Round(d) > float64(cfg.AnchorRadiusM) {
-			return httpx.OutOfRange(d, float64(cfg.AnchorRadiusM))
-		}
+	if anchor != nil && !WithinAnchor(cfg, employer.LatLng{Lat: f.Lat, Lng: f.Lng}, *anchor) {
+		return httpx.OutOfRange(haversineM(f.Lat, f.Lng, anchor.Lat, anchor.Lng), float64(cfg.AnchorRadiusM))
 	}
 	return nil
+}
+
+// WithinAnchor is the distance rule on its own, for assign-employer: it
+// re-measures a stored fix that was already judged for mock, accuracy and skew
+// at capture time, so only position is still in question.
+//
+// Compared at whole-metre resolution, the same unit the client is told about: a
+// fix on the radius must never be refused with "1000 m from anchor (limit
+// 1000 m)", and sub-metre float noise is not a violation.
+func WithinAnchor(cfg config.Config, loc, anchor employer.LatLng) bool {
+	if !finite(loc.Lat, loc.Lng, anchor.Lat, anchor.Lng) {
+		return false
+	}
+	return math.Round(haversineM(loc.Lat, loc.Lng, anchor.Lat, anchor.Lng)) <= float64(cfg.AnchorRadiusM)
 }
 
 func finite(vs ...float64) bool {

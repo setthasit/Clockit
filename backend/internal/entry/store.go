@@ -7,6 +7,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/setthasit/clockit/backend/internal/crypto"
 	"github.com/setthasit/clockit/backend/internal/employer"
@@ -19,6 +20,10 @@ var ErrOpenEntryExists = errors.New("open entry exists")
 
 // ErrEntryNotOpen means the shift was closed between the read and the close.
 var ErrEntryNotOpen = errors.New("entry is not open")
+
+// ErrAlreadyAssigned means the entry gained an employer before this assign
+// landed. Assignment is one-way in v1, so there is nothing to reconcile.
+var ErrAlreadyAssigned = errors.New("entry already has an employer")
 
 // msTime matches BSON's millisecond datetime resolution, so the entry a handler
 // returns is byte-identical to the one a later read decodes.
@@ -42,8 +47,73 @@ func (s *Store) ByClientID(ctx context.Context, userID bson.ObjectID, clientID s
 // ByCloseClientID is the clock-out idempotency lookup. A close carries its own
 // key space: matching a clock-in client_id here is impossible, because a
 // replayed close is only ever recognised through close_client_id.
+//
+// ponytail: no index of its own — the lookup rides the user_id prefix of the
+// existing indexes and scans one user's entries. Add a compound
+// {user_id, close_client_id} index when per-user history is long enough to
+// measure.
 func (s *Store) ByCloseClientID(ctx context.Context, userID bson.ObjectID, clientID string) (*Entry, error) {
-	return s.findOne(ctx, bson.M{"user_id": userID, "close_client_id": clientID})
+	return s.findOne(ctx, bson.M{"user_id": userID, "close_client_id": clientID, "status": statusClosed})
+}
+
+// ByID scopes the read to the owner, so a foreign entry reads exactly like a
+// missing one and the endpoint never confirms which ids exist.
+func (s *Store) ByID(ctx context.Context, userID, entryID bson.ObjectID) (*Entry, error) {
+	return s.findOne(ctx, bson.M{"_id": entryID, "user_id": userID})
+}
+
+// List returns the user's entries newest first, bounded by the half-open window
+// [from, to) on clock_in.at — either end nil is unbounded. Half-open so two
+// adjacent ranges neither drop nor double-count a shift on the boundary.
+//
+// ponytail: unpaginated; the {user_id, clock_in.at} index serves the sort
+// directly and a year of shifts is a few hundred documents. Add a limit and a
+// cursor when one response gets large.
+func (s *Store) List(ctx context.Context, userID bson.ObjectID, from, to *time.Time) ([]Entry, error) {
+	filter := bson.M{"user_id": userID}
+	window := bson.M{}
+	if from != nil {
+		window["$gte"] = msTime(*from)
+	}
+	if to != nil {
+		window["$lt"] = msTime(*to)
+	}
+	if len(window) > 0 {
+		filter["clock_in.at"] = window
+	}
+
+	cur, err := s.entries.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "clock_in.at", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	out := []Entry{}
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Assign attaches an employer to a personal entry. location_verified is decided
+// by the caller, which re-measured both fixes against the employer's anchor.
+//
+// ponytail: the employer_id: nil guard in the filter is the whole concurrency
+// story — assignment is one-way, so the loser of a race is simply told the entry
+// is already assigned rather than reconciled.
+func (s *Store) Assign(ctx context.Context, e *Entry, employerID bson.ObjectID, verified bool) (*Entry, error) {
+	res, err := s.entries.UpdateOne(ctx,
+		bson.M{"_id": e.ID, "user_id": e.UserID, "employer_id": nil},
+		bson.M{"$set": bson.M{"employer_id": employerID, "location_verified": verified}})
+	if err != nil {
+		return nil, err
+	}
+	if res.MatchedCount == 0 {
+		return nil, ErrAlreadyAssigned
+	}
+
+	assigned := *e
+	assigned.EmployerID = &employerID
+	assigned.LocationVerified = verified
+	return &assigned, nil
 }
 
 // OpenEntry returns the user's running shift, or nil when they are clocked out.

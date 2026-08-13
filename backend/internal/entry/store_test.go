@@ -239,6 +239,135 @@ func TestClockOutRaceHasOneWinner(t *testing.T) {
 	}
 }
 
+// Assignment is one-way: two racing assigns must not both "succeed" and leave
+// the loser's location_verified verdict on the entry.
+func TestAssignIsOneWayUnderRace(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	e, _, err := s.ClockIn(ctx, u, nil, "c-1", testFix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	employerID := bson.NewObjectID()
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = s.Assign(ctx, e, employerID, false)
+		}()
+	}
+	wg.Wait()
+
+	won := 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case !errors.Is(err, ErrAlreadyAssigned):
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d calls assigned the entry, want 1", won)
+	}
+
+	stored, err := s.ByID(ctx, u.ID, e.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("ByID = %+v, %v", stored, err)
+	}
+	if stored.EmployerID == nil || *stored.EmployerID != employerID || stored.LocationVerified {
+		t.Fatalf("stored = %+v, want employer %s and location_verified false", stored, employerID.Hex())
+	}
+	// A second employer cannot take over an already-assigned entry.
+	if _, err := s.Assign(ctx, e, bson.NewObjectID(), true); !errors.Is(err, ErrAlreadyAssigned) {
+		t.Fatalf("re-assign = %v, want ErrAlreadyAssigned", err)
+	}
+}
+
+func TestAssignKeepsVerifiedVerdict(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	e, _, err := s.ClockIn(ctx, u, nil, "c-1", testFix())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assigned, err := s.Assign(ctx, e, bson.NewObjectID(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assigned.LocationVerified || assigned.EmployerID == nil {
+		t.Fatalf("assigned = %+v", assigned)
+	}
+	// The returned entry must match what a later read decodes, or the response
+	// would describe a state the database does not hold.
+	stored, err := s.ByID(ctx, u.ID, e.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.LocationVerified || *stored.EmployerID != *assigned.EmployerID {
+		t.Fatalf("stored = %+v, want %+v", stored, assigned)
+	}
+}
+
+func TestListIsScopedSortedAndWindowed(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	base := msTime(time.Now().UTC())
+
+	// Three closed shifts an hour apart, plus a stranger's entry in the window.
+	ats := []time.Time{base.Add(-3 * time.Hour), base.Add(-2 * time.Hour), base.Add(-time.Hour)}
+	for i, at := range ats {
+		f := testFix()
+		f.At = at
+		in, _, err := s.ClockIn(ctx, u, nil, fmt.Sprintf("c-%d", i), f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.At = at.Add(30 * time.Minute)
+		if _, err := s.ClockOut(ctx, u, in, fmt.Sprintf("close-%d", i), f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := &user.User{ID: bson.NewObjectID(), DEKWrapped: u.DEKWrapped}
+	stranger := testFix()
+	stranger.At = ats[1]
+	if _, _, err := s.ClockIn(ctx, other, nil, "c-0", stranger); err != nil {
+		t.Fatal(err)
+	}
+
+	from, to := ats[1], ats[2]
+	cases := []struct {
+		name     string
+		from, to *time.Time
+		want     []time.Time
+	}{
+		{"unbounded, newest first", nil, nil, []time.Time{ats[2], ats[1], ats[0]}},
+		{"from is inclusive", &from, nil, []time.Time{ats[2], ats[1]}},
+		{"to is exclusive", nil, &to, []time.Time{ats[1], ats[0]}},
+		{"half-open window", &from, &to, []time.Time{ats[1]}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.List(ctx, u.ID, tc.from, tc.to)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d entries, want %d", len(got), len(tc.want))
+			}
+			for i, at := range tc.want {
+				if !got[i].ClockIn.At.Equal(at) {
+					t.Fatalf("entry %d at %s, want %s", i, got[i].ClockIn.At, at)
+				}
+			}
+		})
+	}
+}
+
 func TestByClientIDIsScopedToTheUser(t *testing.T) {
 	ctx := context.Background()
 	s, u := testStore(t)
