@@ -24,8 +24,10 @@ const STATUS: Record<MemberStatus, {variant: 'accent' | 'success' | 'neutral'; l
   removed: {variant: 'neutral', label: 'Removed'},
 };
 
-// Mirrors the backend's 100_000_000-cent ceiling so the stepper stops where the API does.
-// The backend still validates: this only keeps the arrows from walking past it.
+// Mirrors the backend's 100_000_000-cent ceiling (employer/handler.go maxHourlyRateCents) so
+// a rate the API would reject is caught in the field: over it, the value is rangeOverflow and
+// the blur handler below refuses to write at all. Not a stepper bound — NumberInput hides the
+// native spinners — and the backend still validates regardless.
 const MAX_RATE_DOLLARS = 1_000_000;
 
 export function EmployeesRoute() {

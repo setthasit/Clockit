@@ -4,6 +4,7 @@ import {useAuth0} from '@auth0/auth0-react';
 import {AppShell} from '@astryxdesign/core/AppShell';
 import {Avatar} from '@astryxdesign/core/Avatar';
 import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
+import {LayerProvider} from '@astryxdesign/core/Layer';
 import {LinkProvider} from '@astryxdesign/core/Link';
 import {NavHeadingMenu, NavHeadingMenuItem} from '@astryxdesign/core/NavMenu';
 import {SideNav, SideNavItem, SideNavSection} from '@astryxdesign/core/SideNav';
@@ -32,82 +33,88 @@ export function Shell() {
   const employer = useActiveEmployer();
 
   return (
-    <LinkProvider component={RouterLink}>
-      <AppShell
-        contentPadding={4}
-        topNav={
-          <TopNav
-            heading={
-              // The heading menu is Astryx's documented product-switcher pattern; a
-              // Selector would announce "New employer" as a selectable value in a listbox
-              // rather than the link it is. Shown at any employer count, so a single
-              // employer account can still reach /onboarding.
-              <TopNavHeading
-                heading="ClockIt"
-                headingHref="/calendar"
-                subheading={employer.name}
-                menu={
-                  <NavHeadingMenu>
-                    {employers.map((e) => (
-                      <NavHeadingMenuItem
-                        key={e.id}
-                        label={e.name}
-                        onClick={() => setEmployerId(e.id)}
-                      />
-                    ))}
-                    <NavHeadingMenuItem label="New employer" href="/onboarding" />
-                  </NavHeadingMenu>
-                }
-              />
-            }
-            endContent={
-              <DropdownMenu
-                button={{
-                  label: user?.email ?? 'Account',
-                  variant: 'ghost',
-                  icon: (
-                    // tooltip={false}: the button's own label already names the account,
-                    // and the avatar's default tooltip would cover the open menu.
-                    <Avatar
-                      src={user?.picture}
-                      name={user?.name ?? user?.email}
-                      size="sm"
-                      tooltip={false}
-                    />
-                  ),
-                }}
-                alignment="end"
-                items={[
-                  {
-                    label: 'Sign out',
-                    onClick: () =>
-                      logout({logoutParams: {returnTo: window.location.origin}}),
-                  },
-                ]}
-              />
-            }
-          />
-        }
-        sideNav={
-          <SideNav>
-            <SideNavSection title="Navigation" isHeaderHidden>
-              {NAV_ITEMS.map((item) => (
-                <SideNavItem
-                  key={item.href}
-                  label={item.label}
-                  href={item.href}
-                  isSelected={pathname === item.href}
+    // Astryx's own AppShell only carries a TODO where the root providers will go, so it
+    // mounts no toast viewport: without this, useToast warns and portals its own fallback
+    // onto document.body, outside our tree. One provider here puts every toast the app
+    // raises — today only TipCell's failed save — inside it.
+    <LayerProvider>
+      <LinkProvider component={RouterLink}>
+        <AppShell
+          contentPadding={4}
+          topNav={
+            <TopNav
+              heading={
+                // The heading menu is Astryx's documented product-switcher pattern; a
+                // Selector would announce "New employer" as a selectable value in a listbox
+                // rather than the link it is. Shown at any employer count, so a single
+                // employer account can still reach /onboarding.
+                <TopNavHeading
+                  heading="ClockIt"
+                  headingHref="/calendar"
+                  subheading={employer.name}
+                  menu={
+                    <NavHeadingMenu>
+                      {employers.map((e) => (
+                        <NavHeadingMenuItem
+                          key={e.id}
+                          label={e.name}
+                          onClick={() => setEmployerId(e.id)}
+                        />
+                      ))}
+                      <NavHeadingMenuItem label="New employer" href="/onboarding" />
+                    </NavHeadingMenu>
+                  }
                 />
-              ))}
-            </SideNavSection>
-          </SideNav>
-        }>
-        {/* Not a no-op: switching employers remounts the route, so every piece of its
-            state — loaded rows, in-flight optimistic edits, error banners, open dialogs —
-            resets together. Without it a route has to tag each one with the employer it
-            belongs to, and anything it forgets to tag writes A's data against B. */}
-        <Outlet key={employer.id} />
-      </AppShell>
-    </LinkProvider>
+              }
+              endContent={
+                <DropdownMenu
+                  button={{
+                    label: user?.email ?? 'Account',
+                    variant: 'ghost',
+                    icon: (
+                      // tooltip={false}: the button's own label already names the account,
+                      // and the avatar's default tooltip would cover the open menu.
+                      <Avatar
+                        src={user?.picture}
+                        name={user?.name ?? user?.email}
+                        size="sm"
+                        tooltip={false}
+                      />
+                    ),
+                  }}
+                  alignment="end"
+                  items={[
+                    {
+                      label: 'Sign out',
+                      onClick: () =>
+                        logout({logoutParams: {returnTo: window.location.origin}}),
+                    },
+                  ]}
+                />
+              }
+            />
+          }
+          sideNav={
+            <SideNav>
+              <SideNavSection title="Navigation" isHeaderHidden>
+                {NAV_ITEMS.map((item) => (
+                  <SideNavItem
+                    key={item.href}
+                    label={item.label}
+                    href={item.href}
+                    isSelected={pathname === item.href}
+                  />
+                ))}
+              </SideNavSection>
+            </SideNav>
+          }>
+          {/* Not a no-op: switching employers remounts the route, so every piece of its
+              state — loaded rows, in-flight optimistic edits, error banners, open dialogs —
+              resets together. Without it a route has to tag each one with the employer it
+              belongs to, and anything it forgets to tag writes A's data against B. */}
+          <Outlet key={employer.id} />
+        </AppShell>
+      </LinkProvider>
+    </LayerProvider>
   );
 }
