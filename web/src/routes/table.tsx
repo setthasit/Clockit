@@ -15,6 +15,7 @@ import {Spinner} from '@astryxdesign/core/Spinner';
 import {StatusDot} from '@astryxdesign/core/StatusDot';
 import {pixel, proportional, Table, type TableColumn} from '@astryxdesign/core/Table';
 import {Heading, Text} from '@astryxdesign/core/Text';
+import {TipCell} from '../components/TipCell';
 import {api} from '../lib/api';
 import {useActiveEmployer} from '../lib/employer';
 import {cents, dayLabel, minutesToHM} from '../lib/format';
@@ -230,7 +231,7 @@ function columnsFor(onTipSaved: () => void): TableColumn<Row>[] {
               />
             )}
             {summary(row, row.label)}
-            {row.tip && <DayTip day={row.tip.day} cents={row.tip.cents} onSaved={onTipSaved} />}
+            {row.tip && <TipCell day={row.tip.day} cents={row.tip.cents} onSaved={onTipSaved} />}
           </HStack>
           {row.note && (
             <Text type="supporting" color="secondary">
@@ -295,18 +296,4 @@ function columnsFor(onTipSaved: () => void): TableColumn<Row>[] {
       renderCell: (row) => summary(row, cents(row.totalCents)),
     },
   ];
-}
-
-/**
- * ponytail: the day's tip pool, read-only. Task 6.2 lifts this into components/TipCell.tsx
- * as the inline editor that PUTs on blur — so the call site above gains an import and a
- * rename, but nothing else: the day it writes to, the amount it starts from and the refetch
- * it fires on success are already its props.
- */
-function DayTip({cents: amount}: {day: DayKey; cents: number; onSaved: () => void}) {
-  return (
-    <Text type="supporting" color="secondary">
-      Tips {cents(amount)}
-    </Text>
-  );
 }
