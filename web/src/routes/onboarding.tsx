@@ -80,8 +80,6 @@ export function OnboardingRoute() {
             </Text>
           </VStack>
 
-          {error && <Banner status="error" title={error} />}
-
           <TextInput
             label="Name"
             value={name}
@@ -106,13 +104,19 @@ export function OnboardingRoute() {
             <MapAnchorPicker value={anchor} onChange={setAnchor} />
           </VStack>
 
-          <HStack gap={3} hAlign="end">
-            {/* Only when there is somewhere to go back to: this page has no nav chrome. */}
-            {employers.length > 0 && (
-              <Button label="Cancel" variant="ghost" onClick={() => navigate('/calendar')} />
-            )}
-            <Button label="Create employer" variant="primary" clickAction={submit} />
-          </HStack>
+          {/* Beside the button, not at the top of the form: the map and coordinate fields
+              put over 1000 px between the two, so a submit error up there is off-screen. */}
+          <VStack gap={3}>
+            {error && <Banner status="error" title={error} />}
+
+            <HStack gap={3} hAlign="end">
+              {/* Only when there is somewhere to go back to: this page has no nav chrome. */}
+              {employers.length > 0 && (
+                <Button label="Cancel" variant="ghost" onClick={() => navigate('/calendar')} />
+              )}
+              <Button label="Create employer" variant="primary" clickAction={submit} />
+            </HStack>
+          </VStack>
         </VStack>
       </Section>
     </Center>

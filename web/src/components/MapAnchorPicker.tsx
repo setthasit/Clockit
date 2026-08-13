@@ -247,13 +247,16 @@ export function MapAnchorPicker({value, onChange}: MapAnchorPickerProps) {
       )}
 
       <HStack gap={3}>
+        {/* hasClear is what widens onChange to number | null — without it an emptied
+            field is never committed and snaps back to the old value on blur. */}
         <NumberInput
           label="Latitude"
           value={lat}
           onChange={(next) => onChange({lat: next, lng})}
+          hasClear
           min={-90}
           max={90}
-          step={0.0001}
+          step={0.000001}
           placeholder="-33.8688"
           width="100%"
         />
@@ -261,9 +264,10 @@ export function MapAnchorPicker({value, onChange}: MapAnchorPickerProps) {
           label="Longitude"
           value={lng}
           onChange={(next) => onChange({lat, lng: next})}
+          hasClear
           min={-180}
           max={180}
-          step={0.0001}
+          step={0.000001}
           placeholder="151.2093"
           width="100%"
         />
