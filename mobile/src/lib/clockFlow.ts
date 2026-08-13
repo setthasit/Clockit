@@ -1,5 +1,5 @@
 import * as Crypto from 'expo-crypto';
-import {Alert} from 'react-native';
+import {Alert, Platform} from 'react-native';
 
 import {ApiError} from '@/api/client';
 import {
@@ -40,6 +40,14 @@ export type ClockResult = {done: boolean; message: string | null};
 
 const OK: ClockResult = {done: true, message: null};
 const ABORTED: ClockResult = {done: false, message: null};
+const NOT_ON_SHIFT: ClockResult = {done: false, message: "You're not on shift."};
+
+// Alert.alert is implemented for exactly two platforms: RN's Alert.js branches on ios/android and
+// returns having touched nothing for anything else, and react-native-web replaces the module with
+// a literal no-op (`class Alert { static alert() {} }`). Everywhere else the dialog is not merely
+// ugly, it never speaks — so anything waiting on it waits forever. Called rather than hoisted to a
+// module constant so both sides of it are reachable from a test.
+const canAlert = () => Platform.OS === 'ios' || Platform.OS === 'android';
 
 /** For anything that escapes the contracts below — api() promises only ApiError, getFix() only
  * LocationError, so this is a bug in our own code, shown rather than thrown because a tap handler
@@ -60,10 +68,15 @@ const DEFAULT_ANCHOR_RADIUS_M = 1000;
 
 // Codes whose answer is about *our view of open/closed*, not about the fix we sent, so the copy
 // alone would leave the worker stuck. OPEN_ENTRY_EXISTS and NO_OPEN_ENTRY are the two conflict
-// verdicts (httpx/codes.go); UNKNOWN is api()'s truncated-200, where the write landed and only
-// the response was lost — the outbox refuses to replay it for exactly that reason, so a hydrate
-// is the only thing that can recover the entry. Without this the revert below is a trap: the
-// screen shows the opposite of the truth and every further tap gets the same 409.
+// verdicts (httpx/codes.go). UNKNOWN has two sources, and only one of them justifies the hydrate:
+// api()'s truncated 200 (client.ts:119-122), where the write landed and only the response was
+// lost — the outbox refuses to replay it for exactly that reason, so a hydrate is the only thing
+// that can recover the entry — and toApiError's catch-all for any unparseable error body at any
+// status (client.ts:138), where the write did *not* land and the hydrate is a wasted full-history
+// decrypt (the cost clock.ts:106-111 names). A 4xx gateway HTML page is the second kind. Hydrating
+// on both is the cheap side of that trade: the first is unrecoverable without it, the second costs
+// one request. Without this the revert below is a trap: the screen shows the opposite of the truth
+// and every further tap gets the same 409.
 const HYDRATE_CODES = new Set(['OPEN_ENTRY_EXISTS', 'NO_OPEN_ENTRY', 'UNKNOWN']);
 
 // Overrides only where the server's own copy is not showable ("an open entry already exists") or
@@ -79,6 +92,10 @@ const COPY: Record<string, string> = {
     'This shift waited too long to sync — ask your employer to add it manually.',
   OPEN_ENTRY_EXISTS: "You're already on shift — checking with the server.",
   NO_OPEN_ENTRY: "You're not on shift — checking with the server.",
+  // Without this the fall-through shows client.ts's "The server returned a malformed response." —
+  // developer copy, on the one path where the clock-in most likely *succeeded* and the hydrate is
+  // about to put the worker on shift underneath it.
+  UNKNOWN: "Couldn't read the server's reply — checking with the server.",
 };
 
 const now = () => new Date().toISOString();
@@ -149,10 +166,29 @@ function localEntry(clientId: string, employerId: string | null, fix: Fix): Entr
   };
 }
 
-// onDismiss is load-bearing, not polish: Android alerts are cancelable by default, so a back
-// press or an outside tap fires no button handler at all — without it this promise never settles
-// and the button stays spinning for the life of the process.
+/**
+ * The dialog must never be the only thing that can settle this promise. prepare() awaits it while
+ * the screen holds `inFlight` and `busy` (index.tsx:57-75), so a promise nothing resolves leaves
+ * the clock button spinning for the life of the process, recoverable only by a reload — which is
+ * the exact harm the confirm was added to prevent.
+ *
+ * ponytail: one strand survives. On Android with no attached Activity, showAlert invokes only the
+ * error callback (DialogModule.kt:123) and Alert.js:137 maps that to console.warn, so neither a
+ * button nor onDismiss ever fires. Reachable when the up-to-15 s getFix() spans the app being
+ * backgrounded hard enough to detach the Activity — merely leaving the foreground does not do it,
+ * that path stashes the dialog and shows it on resume (DialogModule.kt:60-68). Ceiling: the button
+ * is dead until relaunch inside that window. The upgrade path is deliberately *not* a timeout,
+ * which would auto-answer "try anyway" for a worker who left the dialog up while walking outside
+ * for a better fix — trading a rare dead button for a silent clock-in at a location they were
+ * still deciding about. Settle it from the screen instead: resolve false on an AppState change.
+ */
 function confirmWeakGps(accuracy: number): Promise<boolean> {
+  // Answering `true` where we cannot ask, not `false`: the server owns the accuracy verdict either
+  // way (it refuses with LOW_ACCURACY, which COPY maps into readable copy), so proceeding costs at
+  // worst one refusal the worker can act on, while defaulting to false would refuse a clock-in
+  // over a question that was never actually put to them.
+  if (!canAlert()) return Promise.resolve(true);
+
   return new Promise((resolve) => {
     Alert.alert(
       'GPS weak',
@@ -161,6 +197,15 @@ function confirmWeakGps(accuracy: number): Promise<boolean> {
         {text: 'Cancel', style: 'cancel', onPress: () => resolve(false)},
         {text: 'Try anyway', onPress: () => resolve(true)},
       ],
+      // onDismiss is load-bearing, but not for the reason it looks like: RN builds this config with
+      // a literal `cancelable: false` and raises it only when the caller passes options.cancelable
+      // (Alert.js:90, 93-94, applied at DialogModule.kt:63-64), which this call does not — so a
+      // back press does *not* dismiss the dialog and does not need catching. It earns its place
+      // because AlertFragmentListener is also the OnDismissListener (DialogModule.kt:73-74, 86-89):
+      // ACTION_DISMISSED fires on any *other* teardown — a configuration change, the fragment being
+      // destroyed — each of which would otherwise settle nothing. iOS never forwards it at all
+      // (Alert.js:192 reads only userInterfaceStyle out of options), which is harmless there, since
+      // an iOS alert has no dismissal that is not a button.
       {onDismiss: () => resolve(false)},
     );
   });
@@ -186,7 +231,9 @@ async function prepare(): Promise<Prepared> {
   // so queueing one would park a guaranteed rejection in the outbox and drop it on the next flush.
   if (fix.mocked) {
     Alert.alert('Mock location detected', 'Disable fake GPS apps, then try again.');
-    return {failed: ABORTED};
+    // Where the dialog is a no-op the copy has to travel inline instead, or this is a tap that
+    // does nothing and says nothing. ABORTED's null message is right only when the dialog spoke.
+    return {failed: canAlert() ? ABORTED : {done: false, message: COPY.MOCKED_LOCATION}};
   }
 
   // Weak accuracy is a *prediction*, not a rule — the server owns the verdict, so "try anyway"
@@ -249,13 +296,22 @@ export async function clockInNow(
 }
 
 export async function clockOutNow(memberships: Membership[]): Promise<ClockResult> {
-  // Captured before the optimistic write, because it is also what a refusal reverts to: there is
-  // no new entry here, only a running shift that must survive a rejected close.
-  const open = useClockStore.getState().openEntry;
-  if (!open) return {done: false, message: "You're not on shift."};
+  // A cheap bail before spending up to 15 s on a fix. Unreachable from the button, which reads
+  // "Clock in" whenever there is no open entry, so this only guards a programmatic caller.
+  if (!useClockStore.getState().openEntry) return NOT_ON_SHIFT;
 
   const p = await prepare();
   if (p.failed) return p.failed;
+
+  // Read *after* the await, not before it. This is the entry a refusal reverts to and the one the
+  // queued close is keyed on, and prepare() spends up to 15 s in getFix() plus an open-ended
+  // dialog — a hydrate (or a 9.1 flush) landing in that window replaces the running shift, and a
+  // copy captured before it would overwrite the server's entry with a superseded one. For an
+  // optimistic entry that means reverting to id '': a dead /entry/[id] route (7.2) carrying a
+  // stale location_verified. Null now means the shift was closed elsewhere while we were reading
+  // the GPS, which is exactly what it says.
+  const open = useClockStore.getState().openEntry;
+  if (!open) return NOT_ON_SHIFT;
 
   const clientId = Crypto.randomUUID();
   const body: ClockOutBody = {client_id: clientId, ...fixToBody(p.fix)};

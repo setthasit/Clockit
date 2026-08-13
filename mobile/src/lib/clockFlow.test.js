@@ -51,10 +51,13 @@ registerHooks({
         `,
       };
     }
-    // Alert always settles something. A confirm dialog whose promise never resolves is a button
-    // that spins for the life of the process, and in a test suite it is a timeout — which the
-    // suite is not allowed to have, so the stub presses a button or fires onDismiss, never both
-    // and never neither.
+    // On ios/android the stub always settles something: it presses a button or fires onDismiss,
+    // never both and never neither. Off them it settles *nothing*, because that is what ships —
+    // react-native-web replaces this module with a literal no-op ("class Alert { static alert() {}
+    // }"), and RN's own Alert.js branches on ios/android and returns having touched no callback
+    // for anything else. Modelling the no-op rather than smoothing it over is the whole point: a
+    // confirm dialog whose promise never resolves is a clock button that spins for the life of the
+    // process, and this is the only place that can fail instead of a worker's phone.
     if (url === RN_STUB) {
       return {
         format: 'module',
@@ -62,10 +65,17 @@ registerHooks({
         source: `
           export const alerts = [];
           let choice = 'Cancel';
+          export const Platform = {OS: 'ios'};
+          export function setPlatform(os) { Platform.OS = os; }
           export function setAlertChoice(text) { choice = text; }
-          export function resetAlerts() { alerts.length = 0; choice = 'Cancel'; }
+          export function resetAlerts() {
+            alerts.length = 0;
+            choice = 'Cancel';
+            Platform.OS = 'ios';
+          }
           export const Alert = {
             alert(title, message, buttons, options) {
+              if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
               alerts.push({title, message});
               if (!buttons) return;
               const b = buttons.find((x) => x.text === choice);
@@ -109,7 +119,7 @@ registerHooks({
 });
 
 const {resetUUID} = await import(CRYPTO_STUB);
-const {alerts, resetAlerts, setAlertChoice} = await import(RN_STUB);
+const {alerts, resetAlerts, setAlertChoice, setPlatform} = await import(RN_STUB);
 const {setNext} = await import(LOCATION_STUB);
 const {useClockStore} = await import('@/stores/clock');
 const {useOutboxStore} = await import('@/stores/outbox');
@@ -244,6 +254,61 @@ test('weak accuracy asks first: cancel sends nothing, "Try anyway" sends', async
   assert.equal(clockRequests()[0].body.loc.accuracy, 101);
 });
 
+// A back press cannot reach this (RN passes a literal cancelable:false), but a fragment teardown
+// — a configuration change, the dialog being destroyed — fires ACTION_DISMISSED with no button
+// handler, and onDismiss is the only thing listening for it.
+test('a dialog torn down without a button settles as cancel', async () => {
+  reset();
+  setFix({accuracy: 101});
+  setAlertChoice('__no_such_button__');
+
+  const result = await Promise.race([
+    clockInNow('e1', MEMBERSHIPS),
+    new Promise((r) => setTimeout(() => r('STRANDED'), 100)),
+  ]);
+
+  assert.notEqual(result, 'STRANDED', 'a dismissed dialog settled nothing — the button spins forever');
+  assert.deepEqual(result, {done: false, message: null});
+  assert.equal(clockRequests().length, 0);
+});
+
+// The confirm dialog is awaited inside the screen's in-flight guard, so a promise only the dialog
+// can settle does not merely skip a question — it leaves `inFlight` true and `busy` true forever,
+// and the clock button is dead until the process restarts. Raced rather than plainly awaited so
+// that regression fails as an assertion here in 100 ms instead of hanging the suite on a timeout.
+test('a platform with no dialog settles the tap instead of killing the button', async () => {
+  reset();
+  setPlatform('web');
+  setFix({accuracy: 101});
+
+  const result = await Promise.race([
+    clockInNow('e1', MEMBERSHIPS),
+    new Promise((r) => setTimeout(() => r('STRANDED'), 100)),
+  ]);
+
+  assert.notEqual(result, 'STRANDED', 'the confirm never settled — the clock button is dead for the session');
+  assert.equal(alerts.length, 0, 'a dialog that shows nothing was counted as having been shown');
+  // The server owns the accuracy verdict, so a question we could not put to the worker must not
+  // be answered "no" on their behalf — that would refuse the clock-in outright.
+  assert.equal(result.done, true);
+  assert.equal(clockRequests().length, 1);
+});
+
+test('a mocked fix on a platform with no dialog says so inline rather than dying silently', async () => {
+  reset();
+  setPlatform('web');
+  setFix({mocked: true});
+
+  const result = await clockInNow('e1', MEMBERSHIPS);
+
+  assert.equal(result.done, false);
+  // Without inline copy this tap shows nothing at all: the alert is a no-op and ABORTED's message
+  // is null, so the worker taps Clock in and the screen does not react.
+  assert.match(result.message, /Mock location/i, 'the tap died silently with nothing on screen');
+  assert.equal(clockRequests().length, 0);
+  assert.equal(outbox().items.length, 0);
+});
+
 test('a fix that cannot be read shows its own copy and queues nothing', async () => {
   reset();
   setNext(async () => {
@@ -332,6 +397,65 @@ test('OPEN_ENTRY_EXISTS reverts, tells the worker, and re-asks the server', asyn
   assert.equal(clock().openEntry.id, 'srv-9', 'the real open shift was never recovered');
 });
 
+// The clock-out mirror of the case above, and the escape from the same loop: the server closed
+// this shift by another route, so our "on shift" view is the stale one and every further tap gets
+// the same 409 until something re-asks.
+test('NO_OPEN_ENTRY reverts, tells the worker, and re-asks the server', async () => {
+  reset();
+  clock().setOpen(serverEntry({id: 'srv-5', client_id: 'in-5'}));
+  respond = async (url) =>
+    url.includes('/clock-out')
+      ? fail(409, 'NO_OPEN_ENTRY', 'no open entry')
+      : ok({
+          entries: [
+            serverEntry({
+              id: 'srv-5',
+              status: 'closed',
+              clock_out: {at: AT, loc: BKK, accuracy: 5, mocked: false},
+            }),
+          ],
+        });
+
+  const result = await clockOutNow(MEMBERSHIPS);
+
+  assert.equal(result.done, false);
+  assert.match(result.message, /not on shift/i, 'the worker was told nothing');
+
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(
+    requests.some((r) => r.url.includes('/v1/entries') && r.method === 'GET'),
+    'no hydrate was triggered — the screen is now stuck 409ing forever',
+  );
+  // Also pins the write ordering: the revert runs first and the hydrate takes its ticket after,
+  // so the server's answer is the one that survives.
+  assert.equal(clock().openEntry, null, 'the revert put the closed shift back and the hydrate lost');
+});
+
+test('a truncated 200 is never replayed, and the write that landed is recovered', async () => {
+  reset();
+  respond = async (url) =>
+    url.includes('/clock-in')
+      ? // The write landed; only the response was lost on the way back. api() cannot parse it and
+        // raises ApiError(200, 'UNKNOWN') — non-retryable precisely so no replay can double the
+        // shift, which leaves a hydrate as the only way the entry is ever seen again.
+        new Response('{"entry":{"id":"srv-7"', {status: 200})
+      : ok({entries: [serverEntry({id: 'srv-7', client_id: 'uuid-1'})]});
+
+  const result = await clockInNow('e1', MEMBERSHIPS);
+
+  assert.equal(result.done, false);
+  assert.equal(outbox().items.length, 0, 'a write that already landed was queued — the shift is paid twice');
+  assert.match(
+    result.message,
+    /checking with the server/i,
+    "client.ts's developer copy was shown to a worker whose clock-in had in fact succeeded",
+  );
+
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(clock().openEntry, 'no hydrate — the shift that landed is invisible and every tap now 409s');
+  assert.equal(clock().openEntry.id, 'srv-7');
+});
+
 test('a hydrate that fails does not swallow the refusal or reject', async () => {
   reset();
   respond = async (url) => {
@@ -378,6 +502,35 @@ test('a queued clock-out carries the open entry key, even when the entry is itse
   // 7.1 can join a rejected clock-out back to a row.
   assert.equal(out.entryClientId, 'uuid-1', 'the close cannot be matched to its entry');
   assert.equal(clock().openEntry, null, 'the shift did not end locally');
+});
+
+// prepare() spends up to 15 s in getFix() plus an open-ended dialog, and the entry a refusal
+// reverts to must be the one that is true when the refusal arrives, not the one that was true
+// when the tap started.
+test('a clock-out refused after a mid-flight hydrate reverts to the hydrated shift', async () => {
+  reset();
+  respond = offline;
+  await clockInNow('e1', MEMBERSHIPS);
+  assert.equal(clock().openEntry.id, '', 'precondition: the open shift is the optimistic one');
+
+  const real = serverEntry({id: 'srv-REAL', client_id: 'uuid-1'});
+  respond = async (url) =>
+    url.includes('/clock-out') ? fail(422, 'LOW_ACCURACY', 'nope') : ok({entries: [real]});
+  // The flush (or a 9.1 hydrate) lands *during* the clock-out's GPS read and replaces the
+  // optimistic entry with the server's.
+  setNext(async () => {
+    await clock().hydrateFromServer();
+    return {coords: {latitude: BKK.lat, longitude: BKK.lng, accuracy: 5}, timestamp: AT_MS, mocked: false};
+  });
+
+  const result = await clockOutNow(MEMBERSHIPS);
+
+  assert.equal(result.done, false);
+  assert.equal(
+    clock().openEntry.id,
+    'srv-REAL',
+    'the revert restored the pre-await copy: id "" is a dead /entry/[id] route (7.2) carrying a stale location_verified',
+  );
 });
 
 test('an accepted clock-out clears the shift', async () => {

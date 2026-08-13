@@ -23,8 +23,12 @@ const config: ExpoConfig = {
     },
     predictiveBackGestureEnabled: false,
   },
+  // "single", not "static": static rendering prerenders every route through Node at build time,
+  // and this app is entirely behind an Auth0 session with a persisted store that touches `window`
+  // — so the prerender pass has nothing to produce and dies on `window is not defined`. The web
+  // target has never built with `output: "static"`; it exports cleanly as a single-page bundle.
   web: {
-    output: "static",
+    output: "single",
     favicon: "./assets/images/favicon.png",
   },
   plugins: [
