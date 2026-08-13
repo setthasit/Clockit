@@ -3,6 +3,7 @@ package tip
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,11 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	"github.com/valkey-io/valkey-go"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/setthasit/clockit/backend/internal/auth"
 	"github.com/setthasit/clockit/backend/internal/config"
 	"github.com/setthasit/clockit/backend/internal/crypto"
 	"github.com/setthasit/clockit/backend/internal/employer"
@@ -27,9 +31,9 @@ import (
 	"github.com/setthasit/clockit/backend/internal/user"
 )
 
-// testHandler wires the real stores against a throwaway database, and returns
-// the owner the handlers will see plus their employer.
-func testHandler(t *testing.T) (*Handler, *user.User, *employer.Employer) {
+// testDB is a throwaway database and its envelope, shared by the handler-level
+// tests and the full route-stack harness below.
+func testDB(t *testing.T) (*mongo.Database, *crypto.Envelope) {
 	t.Helper()
 	uri := os.Getenv("MONGO_URI")
 	if uri == "" {
@@ -65,6 +69,14 @@ func testHandler(t *testing.T) (*Handler, *user.User, *employer.Employer) {
 	if err := mongox.EnsureIndexes(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
+	return db, env
+}
+
+// testHandler wires the real stores against a throwaway database, and returns
+// the owner the handlers will see plus their employer.
+func testHandler(t *testing.T) (*Handler, *user.User, *employer.Employer) {
+	t.Helper()
+	db, env := testDB(t)
 
 	owner := &user.User{ID: bson.NewObjectID()}
 	employers := employer.NewStore(db, env)
@@ -269,7 +281,7 @@ func TestBuildReportSurfacesOrphanTipsAndBoundsDays(t *testing.T) {
 // Zones that spring forward at midnight (Chile) have days whose local midnight
 // does not exist; time normalises those backwards an hour. A window built tight
 // on such a day would end before its last hour, so a 23:00 shift would silently
-// go unpaid. instantWindow keeps an hour of slack on both sides instead.
+// go unpaid. instantWindow keeps a day of slack on both sides instead.
 func TestInstantWindowCoversMidnightGapDay(t *testing.T) {
 	loc, err := time.LoadLocation("America/Santiago")
 	if err != nil {
@@ -304,6 +316,13 @@ func TestInstantWindowCoversMidnightGapDay(t *testing.T) {
 	if !last.Before(*to) {
 		t.Fatalf("window ends at %s, dropping the 23:00 shift at %s", to, last)
 	}
+	// The from end carries the same day of slack, so no offset change tzdata can
+	// ship moves a requested day's first shift out of the window. Shrinking the
+	// slack back to an hour fails here.
+	midnight := time.Date(gap.Year(), gap.Month(), gap.Day(), 0, 0, 0, 0, loc)
+	if from.After(midnight.Add(-24 * time.Hour)) {
+		t.Fatalf("window starts at %s, less than a day before local midnight %s", from, midnight)
+	}
 }
 
 // Ownership failures answer 404 on every route here, so the endpoints never
@@ -326,4 +345,267 @@ func TestTipRoutesAre404ForNonOwners(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("put: status = %d, want 404: %s", rec.Code, rec.Body)
 	}
+}
+
+const (
+	testAuth0Domain   = "test.auth0.local"
+	testAuth0Audience = "https://api.clockit.test"
+	// The employer's anchor, downtown Vancouver. Every fixture shift is clocked
+	// on it, so distance never enters the report.
+	vanLat, vanLng = 49.2827, -123.1207
+)
+
+// testAPI wires the real route stack — httpx.NewEcho, the auth middleware
+// against a local signing key, Mongo and Valkey — so the report is read exactly
+// the way a client reads it. The user, employer and entry routes are registered
+// alongside because the fixture's people, memberships and rates come from them.
+type testAPI struct {
+	handler http.Handler
+	key     *rsa.PrivateKey
+	db      *mongo.Database
+	entries *entry.Store
+}
+
+func newTestAPI(t *testing.T) *testAPI {
+	t.Helper()
+	addr := os.Getenv("VALKEY_ADDR")
+	if addr == "" {
+		t.Skip("VALKEY_ADDR not set")
+	}
+	db, env := testDB(t)
+
+	vk, err := valkey.NewClient(valkey.ClientOption{InitAddress: []string{addr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(vk.Close)
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Auth0Domain:   testAuth0Domain,
+		Auth0Audience: testAuth0Audience,
+		MaxAccuracyM:  100,
+		MaxClockSkew:  5 * time.Minute,
+		AnchorRadiusM: 1000,
+		// High enough that no test trips the limiter; the limiter itself is
+		// covered in valkeyx.
+		RateLimitPerMin: 1000,
+	}
+	authMW := auth.NewMiddlewareWithKeyfunc(cfg, func(*jwt.Token) (any, error) { return &key.PublicKey, nil })
+	e := httpx.NewEcho(cfg)
+	userStore := user.NewStore(db, env)
+	employerStore := employer.NewStore(db, env)
+	entryStore := entry.NewStore(db, env)
+	user.RegisterRoutes(e, user.NewHandler(userStore), authMW, vk, cfg)
+	employer.RegisterRoutes(e, employer.NewHandler(employerStore), userStore, authMW, vk, cfg)
+	entry.RegisterRoutes(e, entry.NewHandler(entryStore, employerStore, cfg), userStore, authMW, vk, cfg)
+	RegisterRoutes(e, NewHandler(NewStore(db), employerStore, entryStore), userStore, authMW, vk, cfg)
+	return &testAPI{handler: e, key: key, db: db, entries: entryStore}
+}
+
+// token mints a verified identity; the subject is derived from the address so
+// repeated calls for one address are the same person.
+func (a *testAPI) token(t *testing.T, email string) string {
+	t.Helper()
+	raw, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"sub":                            "auth0|" + email,
+		"iss":                            "https://" + testAuth0Domain + "/",
+		"aud":                            testAuth0Audience,
+		"exp":                            time.Now().Add(time.Hour).Unix(),
+		"https://clockit/email":          email,
+		"https://clockit/email_verified": true,
+	}).SignedString(a.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func (a *testAPI) do(method, path, token, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	a.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func decodeBody(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, out any) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, wantStatus, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
+		t.Fatalf("%v (%s)", err, rec.Body)
+	}
+}
+
+func (a *testAPI) createEmployer(t *testing.T, ownerToken string) string {
+	t.Helper()
+	var body struct {
+		Employer struct {
+			ID string `json:"id"`
+		} `json:"employer"`
+	}
+	decodeBody(t, a.do(http.MethodPost, "/v1/employers", ownerToken, fmt.Sprintf(
+		`{"name":"Acme","anchor":{"lat":%v,"lng":%v},"timezone":"America/Vancouver"}`, vanLat, vanLng)),
+		http.StatusCreated, &body)
+	return body.Employer.ID
+}
+
+// member signs the address in and names it before the invitation is created, so
+// the membership is claimed on add and the report's name join has something to
+// find. Returns the user document, which the entry store needs for its DEK.
+func (a *testAPI) member(t *testing.T, ownerToken, employerID, email, name string, rateCents int64) *user.User {
+	t.Helper()
+	token := a.token(t, email)
+	if rec := a.do(http.MethodPatch, "/v1/me", token, `{"name":"`+name+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("sign in %s: status = %d: %s", email, rec.Code, rec.Body)
+	}
+	var added struct {
+		Member struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"member"`
+	}
+	decodeBody(t, a.do(http.MethodPost, "/v1/employers/"+employerID+"/members", ownerToken,
+		`{"email":"`+email+`"}`), http.StatusCreated, &added)
+	if added.Member.Status != "active" {
+		t.Fatalf("member %s status = %q, want active", email, added.Member.Status)
+	}
+	if rec := a.do(http.MethodPatch, "/v1/employers/"+employerID+"/members/"+added.Member.ID, ownerToken,
+		fmt.Sprintf(`{"hourly_rate_cents":%d}`, rateCents)); rec.Code != http.StatusNoContent {
+		t.Fatalf("set rate for %s: status = %d: %s", email, rec.Code, rec.Body)
+	}
+
+	var u user.User
+	if err := a.db.Collection("users").FindOne(context.Background(), bson.M{"email": email}).Decode(&u); err != nil {
+		t.Fatal(err)
+	}
+	return &u
+}
+
+// recordShift writes a closed shift through the entry store rather than the
+// endpoints: the clock-in handler rejects fixture timestamps as clock skew, and
+// the report only ever reads what the store holds.
+func (a *testAPI) recordShift(t *testing.T, u *user.User, employerID, clientID string, in, out time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	eid, err := bson.ObjectIDFromHex(employerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fix := func(at time.Time) entry.Fix {
+		return entry.Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: at}
+	}
+	open, _, err := a.entries.ClockIn(ctx, u, &eid, clientID, fix(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.entries.ClockOut(ctx, u, open, clientID+"-close", fix(out)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertRow(t *testing.T, got reportRow, u *user.User, minutes, rate, base, tip, total int64) {
+	t.Helper()
+	if got.User.ID != u.ID || got.User.Name != u.Name {
+		t.Fatalf("row = %+v, want %s (%s)", got, u.Name, u.ID.Hex())
+	}
+	if got.Minutes != minutes || got.TipShareCents != tip || got.TotalCents != total {
+		t.Fatalf("row %s = %+v, want %d min, %d¢ tip, %d¢ total", u.Name, got, minutes, tip, total)
+	}
+	if got.HourlyRateCents == nil || *got.HourlyRateCents != rate {
+		t.Fatalf("row %s rate = %v, want %d¢/h", u.Name, got.HourlyRateCents, rate)
+	}
+	if got.BasePayCents == nil || *got.BasePayCents != base {
+		t.Fatalf("row %s base pay = %v, want %d¢", u.Name, got.BasePayCents, base)
+	}
+}
+
+// The payroll report end to end, asserted to the cent: two people on known
+// rates, a shift that crosses midnight, a shift that starts at 23:30 local, and
+// one day's tip pool split between them.
+func TestReportFixtureSplitsToTheCent(t *testing.T) {
+	api := newTestAPI(t)
+	ownerToken := api.token(t, "owner@example.com")
+	employerID := api.createEmployer(t, ownerToken)
+	ana := api.member(t, ownerToken, employerID, "ana@example.com", "Ana", 1800)
+	bo := api.member(t, ownerToken, employerID, "bo@example.com", "Bo", 2200)
+
+	loc, err := time.LoadLocation("America/Vancouver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture is written in UTC on purpose: which local day an instant lands
+	// on is the thing under test, so every one of them is asserted, not assumed.
+	at := func(utc, wantLocal string) time.Time {
+		t.Helper()
+		ts, err := time.Parse(time.RFC3339, utc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ts.In(loc).Format("2006-01-02 15:04"); got != wantLocal {
+			t.Fatalf("%s is %s in Vancouver, want %s", utc, got, wantLocal)
+		}
+		return ts
+	}
+
+	// 480 minutes inside one local day.
+	api.recordShift(t, ana, employerID, "ana-1",
+		at("2026-06-15T16:00:00Z", "2026-06-15 09:00"),
+		at("2026-06-16T00:00:00Z", "2026-06-15 17:00"))
+	// 240 minutes across midnight. Both UTC instants are already the 16th; the
+	// shift is paid on the 15th it started on (design §4.6).
+	api.recordShift(t, bo, employerID, "bo-1",
+		at("2026-06-16T05:00:00Z", "2026-06-15 22:00"),
+		at("2026-06-16T09:00:00Z", "2026-06-16 02:00"))
+	// The timezone edge: 23:30 local is the 16th, never the UTC 17th.
+	api.recordShift(t, ana, employerID, "ana-2",
+		at("2026-06-17T06:30:00Z", "2026-06-16 23:30"),
+		at("2026-06-17T07:30:00Z", "2026-06-17 00:30"))
+
+	if rec := api.do(http.MethodPut, "/v1/employers/"+employerID+"/tips/2026-06-15", ownerToken,
+		`{"amount_cents":10000}`); rec.Code != http.StatusOK {
+		t.Fatalf("put tip: status = %d: %s", rec.Code, rec.Body)
+	}
+
+	var body struct {
+		Days []reportDay `json:"days"`
+	}
+	decodeBody(t, api.do(http.MethodGet,
+		"/v1/employers/"+employerID+"/report?from=2026-06-15&to=2026-06-16", ownerToken, ""),
+		http.StatusOK, &body)
+	// Two days: the tail of Ana's overnight shift must not open a third.
+	if len(body.Days) != 2 {
+		t.Fatalf("days = %+v, want the 15th and the 16th only", body.Days)
+	}
+
+	// Base pay by hand: Ana 1800*480/60 = 14400, Bo 2200*240/60 = 8800.
+	// Tip split by hand: Ana 10000*480/720 = 6666 remainder 480, Bo
+	// 10000*240/720 = 3333 remainder 240. The floors sum to 9999, so the single
+	// leftover cent goes to the larger remainder, Ana's.
+	first := body.Days[0]
+	if first.Date != "2026-06-15" || first.TipCents != 10000 || first.TotalMinutes != 720 ||
+		first.TotalBasePayCents != 23200 || first.TotalTipShareCents != 10000 || first.TotalCents != 33200 {
+		t.Fatalf("15th = %+v, want 720 min, 23200¢ base, 10000¢ tips, 33200¢ total", first)
+	}
+	if len(first.Rows) != 2 {
+		t.Fatalf("15th rows = %+v, want Ana and Bo", first.Rows)
+	}
+	assertRow(t, first.Rows[0], ana, 480, 1800, 14400, 6667, 21067)
+	assertRow(t, first.Rows[1], bo, 240, 2200, 8800, 3333, 12133)
+
+	second := body.Days[1]
+	if second.Date != "2026-06-16" || second.TipCents != 0 || second.TotalMinutes != 60 ||
+		second.TotalBasePayCents != 1800 || second.TotalTipShareCents != 0 || second.TotalCents != 1800 {
+		t.Fatalf("16th = %+v, want 60 min, 1800¢ base and no tip", second)
+	}
+	if len(second.Rows) != 1 {
+		t.Fatalf("16th rows = %+v, want Ana's 23:30 shift alone", second.Rows)
+	}
+	assertRow(t, second.Rows[0], ana, 60, 1800, 1800, 0, 1800)
 }

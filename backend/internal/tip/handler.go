@@ -322,22 +322,18 @@ func parseDay(name, raw string) (string, error) {
 	return raw, nil
 }
 
-// instantWindow turns employer-local days into the UTC window the entry store
-// filters clock_in.at on. It is a prefilter, not the day attribution: buildReport
-// decides which day an entry belongs to from its own local date string. So the
-// window is deliberately an hour slack on both sides — where local midnight does
-// not exist (zones that spring forward at midnight, America/Santiago) time
-// normalises it backwards an hour, and a tight window would drop a 23:00 shift
-// on the last day as unpaid. The slack only ever admits rows the day filter
-// discards.
+// instantWindow prefilters clock_in.at with a day of slack on each side — a
+// superset of the requested local days under any zone's offset changes, since
+// buildReport's local date string is what actually binds an entry to a day.
 func instantWindow(from, to string, loc *time.Location) (*time.Time, *time.Time, error) {
+	const slack = 24 * time.Hour
 	var fromAt, toAt *time.Time
 	if from != "" {
 		t, err := time.ParseInLocation(dayLayout, from, loc)
 		if err != nil {
 			return nil, nil, err
 		}
-		start := t.Add(-time.Hour)
+		start := t.Add(-slack)
 		fromAt = &start
 	}
 	if to != "" {
@@ -345,7 +341,7 @@ func instantWindow(from, to string, loc *time.Location) (*time.Time, *time.Time,
 		if err != nil {
 			return nil, nil, err
 		}
-		next := t.AddDate(0, 0, 1).Add(time.Hour)
+		next := t.AddDate(0, 0, 1).Add(slack)
 		toAt = &next
 	}
 	return fromAt, toAt, nil
