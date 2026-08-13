@@ -8,14 +8,14 @@ Deliverable: the full employee app against the local backend — Auth0 sign-in, 
 
 **Dependencies**: Phase 2 (API running at `http://<LAN-IP>:8080`). Runs parallel to phase 4.
 
-Stack: latest stable Expo SDK via `npx create-expo-app`, TypeScript, expo-router, NativeWind, Zustand (+ `persist` with AsyncStorage), `react-native-auth0` (+ its Expo config plugin), `expo-location`, `@react-native-community/netinfo`, `expo-crypto` (UUIDs). Dev builds via `npx expo run:ios|android` or a dev client — `react-native-auth0` is native code, plain Expo Go will not work.
+Stack: latest stable Expo SDK via `npx create-expo-app` (SDK 54+ required for `@expo/ui`; New Architecture default), TypeScript, expo-router, `@expo/ui` (universal namespace `@expo/ui/universal` by default; per-platform `swift-ui`/`jetpack-compose` only when a universal component is missing) + plain `StyleSheet` for custom views, Zustand (+ `persist` with AsyncStorage), `react-native-auth0` (+ its Expo config plugin), `expo-location`, `@react-native-community/netinfo`, `expo-crypto` (UUIDs). Dev builds via `npx expo run:ios|android` or a dev client — `react-native-auth0` is native code, plain Expo Go will not work.
 
 Rules: no barrel files; components in `src/components` only when reused or >~80 lines; screens own their layout. All money/time formatting helpers in one `src/lib/format.ts`. Accent `#00286E`.
 
 ## Tasks
 
 - [ ] Task 1: Project scaffold
-  - [ ] 1.1: create-expo-app + NativeWind + theme
+  - [ ] 1.1: create-expo-app + @expo/ui + theme
   - [ ] 1.2: expo-router skeleton + app.json config
 - [ ] Task 2: Auth
   - [ ] 2.1: Auth0 provider + session store
@@ -49,11 +49,13 @@ Rules: no barrel files; components in `src/components` only when reused or >~80 
 
 #### 1.1: App + styling
 
-`npx create-expo-app@latest mobile -t` (TypeScript, tabs template acceptable then pruned). Install NativeWind per its current Expo guide (babel preset + `tailwind.config.js` + `global.css`). Theme tokens in `tailwind.config.js`:
+`npx create-expo-app@latest mobile -t` (TypeScript, tabs template acceptable then pruned). `npx expo install @expo/ui`. Theme tokens in `mobile/src/lib/theme.ts`:
 
-```js
-theme: { extend: { colors: { brand: "#00286E" } } }
+```ts
+export const theme = { brand: "#00286E", spacing: { s: 8, m: 16, l: 24 }, radius: { m: 12, full: 999 } };
 ```
+
+Custom views style with plain `StyleSheet` + these tokens. Expo UI components take colors via props/modifiers — no CSS layer.
 
 **File**: `mobile/src/lib/format.ts` — `formatClock(dt)`, `formatDuration(mins)` (`3h 41m`), `formatDistance(m)` (`620 m` / `2.4 km`), `dayKey(dt)`.
 
@@ -183,7 +185,7 @@ Visible when clocked out and `me.memberships.filter(m => m.status === "active").
 
 #### 6.3: EmployerSheet
 
-Plain `Modal` (slide-up, no bottom-sheet dependency): one row per active membership — name + live distance + disabled style when out of range (still tappable; server gives the authoritative error) — plus divider and "No employer (personal)". Renders only when memberships ≥ 1; zero memberships clock in directly with no popup (design requirement).
+`BottomSheet` from `@expo/ui/universal` (native sheet, no extra dependency): one row per active membership — name + live distance + disabled style when out of range (still tappable; server gives the authoritative error) — plus divider and "No employer (personal)". Renders only when memberships ≥ 1; zero memberships clock in directly with no popup (design requirement).
 
 #### 6.4: Flow + error mapping
 
@@ -205,19 +207,19 @@ Error map (code → copy): `MOCKED_LOCATION` "Mock location detected — disable
 
 **File**: `mobile/app/(tabs)/history.tsx`
 
-`listEntries(last 30 days)` + pull-to-refresh (`FlatList` + `RefreshControl`, sections by `dayKey`). Row (`src/components/EntryRow.tsx`): employer chip (brand outline; gray "Personal"), `9:02 – 17:35`, duration, open entry → pulsing "on shift", `needsAttention` match → amber warning icon. Top banner when `outbox.items.length > 0`: "N actions waiting to sync".
+`listEntries(last 30 days)` + pull-to-refresh (`FlatList` + `RefreshControl`, sections by `dayKey`). Row (`src/components/EntryRow.tsx`): employer chip (brand outline; gray "Personal"), `9:02 – 17:35`, duration, open entry → pulsing "on shift", `needsAttention` match → amber warning icon. Top banner when `outbox.items.length > 0`: "N actions waiting to sync". Rows are custom RN (chips/pulse don't map to Expo UI `List`); use Expo UI only if a universal component fits without fighting it.
 
 #### 7.2: Detail + assign
 
 **File**: `mobile/app/entry/[id].tsx`
 
-Times, duration, employer, `location_verified` badge (green "Location verified" / amber "Not verified"), flags list. Personal entries: "Assign employer" → simple picker of active memberships → `assignEmployer` → refetch → toast; explain resulting badge if unverified ("Outside Acme's zone at clock-in time").
+Times, duration, employer, `location_verified` badge (green "Location verified" / amber "Not verified"), flags list. Personal entries: "Assign employer" → `Picker` from `@expo/ui/universal` (active memberships) → `assignEmployer` → refetch → toast; explain resulting badge if unverified ("Outside Acme's zone at clock-in time").
 
 ### Task 8: Profile
 
 **File**: `mobile/app/(tabs)/profile.tsx`
 
-Name (editable → `patchMe`), email (read-only), memberships list ("Added by Acme Cafe · active"), app version, "Sign out" → Auth0 `clearSession()` + wipe all stores (session/clock/outbox — warn if outbox non-empty: "N unsynced actions will be lost").
+Name (editable → `patchMe`), email (read-only), memberships list ("Added by Acme Cafe · active"), app version, "Sign out" → Auth0 `clearSession()` + wipe all stores (session/clock/outbox — warn if outbox non-empty: "N unsynced actions will be lost"). Settings-style layout via `@expo/ui/universal` (`FieldGroup`/`List` rows, `TextInput` for name); sign-in screen, ClockButton, DistanceBadge stay custom RN + StyleSheet.
 
 ### Task 9: Outbox sync triggers
 

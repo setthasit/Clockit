@@ -210,7 +210,7 @@ Backends: local dev and beta use the `grafana/otel-lgtm` container/pod (Collecto
 
 Mobile/web instrumentation is out of scope for v1; because the API propagates W3C trace context, adding OTel-JS or Sentry later joins traces end-to-end without backend changes.
 
-## 5. Mobile app (Expo + Zustand + NativeWind)
+## 5. Mobile app (Expo + Zustand + Expo UI)
 
 ### 5.1 Structure
 
@@ -236,10 +236,10 @@ mobile/
     location/fix.ts          # getCurrentPositionAsync(Highest), mocked check, distance()
     location/tracking.ts     # TaskManager task: bg pings every 10 min
     components/              # ClockButton, EmployerSheet, DistanceBadge, EntryRow...
-    theme.ts                 # accent #00286E, spacing, radii (NativeWind config)
+    theme.ts                 # accent #00286E, spacing, radii (plain TS tokens)
 ```
 
-No barrel files; import concrete paths. Key packages: `expo-location`, `expo-task-manager`, `react-native-auth0`, `zustand`, `nativewind`, `@react-native-community/netinfo`.
+No barrel files; import concrete paths. Key packages: `expo-location`, `expo-task-manager`, `react-native-auth0`, `zustand`, `@expo/ui` (universal namespace first; native SwiftUI/Jetpack Compose components, custom views use plain StyleSheet), `@react-native-community/netinfo`.
 
 ### 5.2 Clock-in UX
 

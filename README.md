@@ -19,7 +19,7 @@ Employee clock-in/clock-out with location validation. Employees clock in from a 
 
 | Part | Tech |
 |---|---|
-| `mobile/` — employee app | React Native, Expo, Zustand, NativeWind, Auth0 |
+| `mobile/` — employee app | React Native, Expo, Zustand, Expo UI, Auth0 |
 | `web/` — employer app | React 19, Astryx (StyleX), Vite, Auth0 |
 | `backend/` — API | Go, Echo, uber/fx, MongoDB, Valkey, KEK/DEK envelope encryption (Cloud KMS), OpenTelemetry (traces + metrics + logs) |
 | `infra/` | GCP (GKE Autopilot, Cloud CDN, Cloud KMS), MongoDB Atlas (private endpoint), Cloudflare DNS, Tailscale (beta env), OpenTofu |
