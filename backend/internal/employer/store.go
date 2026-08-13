@@ -280,7 +280,7 @@ func (s *Store) updateMember(ctx context.Context, employerID, membershipID bson.
 }
 
 func (s *Store) member(ctx context.Context, e *Employer, m *Membership, name string) (*Member, error) {
-	out := &Member{ID: m.ID, Email: m.Email, Status: m.Status, Name: name}
+	out := &Member{ID: m.ID, UserID: m.UserID, Email: m.Email, Status: m.Status, Name: name}
 	if len(m.HourlyRateCentsEnc) == 0 {
 		return out, nil
 	}

@@ -11,14 +11,16 @@ import "sort"
 // remainders, breaking ties by larger minutes then by lower index so the same
 // input always produces the same split.
 //
-// Integer arithmetic throughout: amountCents*minutes[i] peaks around 10^14 for
-// realistic pools, far inside int64, while float shares would not sum exactly.
+// Integer arithmetic throughout: amountCents*minutes[i] peaks around 10^9 for
+// realistic pools and 10^11 at the cap the PUT handler enforces, far inside
+// int64, while float shares would not sum exactly.
 //
 // A zero total (no minutes worked, or an empty slice) yields all zeros — the
 // tip is simply left unassigned in the report. Negative inputs are a caller
-// bug, not a reachable state (the PUT handler validates amount_cents >= 0 and
-// minutes are derived from closed entries); they are clamped to zero rather
-// than rejected, so a bad caller cannot hand someone a negative payout.
+// bug, not a reachable state (the PUT handler bounds amount_cents to
+// [0, maxTipCents] and minutes are derived from closed entries); they are
+// clamped to zero rather than rejected, so a bad caller cannot hand someone a
+// negative payout.
 func SplitByMinutes(amountCents int64, minutes []int64) []int64 {
 	shares := make([]int64, len(minutes))
 

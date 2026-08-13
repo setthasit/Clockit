@@ -36,14 +36,16 @@ type Membership struct {
 
 // Member is the employer-owned projection of a membership: the rate is
 // decrypted (the owner set it and design §4.2 allows it on this route only) and
-// the linked user's name is joined in. Name is empty until the invitation is
-// claimed.
+// the linked user's name is joined in. Name is empty and UserID nil until the
+// invitation is claimed; UserID is what the payroll report joins time entries
+// on.
 type Member struct {
-	ID              bson.ObjectID `json:"id"`
-	Email           string        `json:"email"`
-	Status          string        `json:"status"`
-	Name            string        `json:"name"`
-	HourlyRateCents *int64        `json:"hourly_rate_cents"`
+	ID              bson.ObjectID  `json:"id"`
+	UserID          *bson.ObjectID `json:"user_id"`
+	Email           string         `json:"email"`
+	Status          string         `json:"status"`
+	Name            string         `json:"name"`
+	HourlyRateCents *int64         `json:"hourly_rate_cents"`
 }
 
 // LatLng is both the JSON body of anchor_enc and the wire shape of an anchor.

@@ -22,7 +22,7 @@ func TestSplitByMinutes(t *testing.T) {
 		{"exact division needs no remainder pass", 100, []int64{30, 10}, []int64{75, 25}},
 		{"leftover cent to the largest remainder", 101, []int64{60, 30}, []int64{67, 34}},
 		{"equal remainders break toward larger minutes", 10, []int64{3, 1}, []int64{8, 2}},
-		{"equal remainders and minutes break toward lower index", 10, []int64{1, 3}, []int64{2, 8}},
+		{"larger minutes wins the cent regardless of order", 10, []int64{1, 3}, []int64{2, 8}},
 		{"negative minutes clamp to zero", 100, []int64{-30, 30}, []int64{0, 100}},
 		{"negative amount yields no payout", -100, []int64{30, 30}, []int64{0, 0}},
 	}
