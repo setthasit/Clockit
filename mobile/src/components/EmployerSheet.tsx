@@ -14,17 +14,19 @@ import { formatDistance } from "@/lib/format";
 import { theme } from "@/lib/theme";
 import { distanceM, inRange } from "@/location/fix";
 
-/**
- * Two gaps task 6.4 has to close, both additive — nothing here needs rewriting for them:
- * no `busy` prop, so rows stay tappable while a clock-in is in flight and a double tap fires
- * `onSelect` twice; and no slot for the mapped error, which §6.4 wants shown inside the sheet.
- */
 type Props = {
   visible: boolean;
   /** /v1/me returns active memberships only (api/me.ts), so there is nothing here to filter. */
   memberships: Membership[];
   /** Latest reading from the screen's poller: null before the first one lands, or after one failed. */
   fix: Fix | null;
+  /** A clock-in is in flight: selectable rows go inert so a second tap cannot start a second
+   * shift. Cancel stays live on purpose — the request completes either way, and trapping someone
+   * behind a 15 s timeout is worse than letting them close a sheet whose answer arrives anyway. */
+  busy?: boolean;
+  /** The mapped refusal from task 6.4, shown here rather than on the screen because a rejected
+   * clock-in leaves this sheet open and the message has to be where the eyes already are. */
+  error?: string | null;
   /**
    * A row was chosen: employer id, or null for a personal entry — task 6.4 turns null into an
    * omitted `employer_id` (api/entries.ts ClockInBody). Separate from onDismiss because a
@@ -58,6 +60,8 @@ export function EmployerSheet({
   visible,
   memberships,
   fix,
+  busy = false,
+  error = null,
   onSelect,
   onDismiss,
 }: Props) {
@@ -102,8 +106,10 @@ export function EmployerSheet({
           { paddingBottom: insets.bottom + theme.spacing.s },
         ]}
       >
+        {/* The title carries the busy state rather than a spinner: the rows below are inert while
+            a request is in flight, and a sheet that silently ignores taps reads as broken. */}
         <Text accessibilityRole="header" style={styles.title}>
-          Clock in for
+          {busy ? "Clocking in…" : "Clock in for"}
         </Text>
 
         {/* Membership order, never nearest-first: `fix` refreshes every 15 s and this sheet can be
@@ -131,6 +137,7 @@ export function EmployerSheet({
                 // user otherwise would be a lie. "Out of range" is in the label, so the state never
                 // depends on the muted colour.
                 accessibilityLabel={`${m.employer.name}, ${detail}`}
+                disabled={busy}
                 onPress={() => onSelect(m.employer.id)}
                 style={({ pressed }) => [styles.row, pressed && styles.pressed]}
               >
@@ -159,6 +166,7 @@ export function EmployerSheet({
             there. */}
         <Pressable
           accessibilityRole="button"
+          disabled={busy}
           onPress={() => onSelect(null)}
           style={({ pressed }) => [styles.row, pressed && styles.pressed]}
         >
@@ -166,6 +174,14 @@ export function EmployerSheet({
         </Pressable>
 
         <View style={styles.divider} />
+
+        {/* Announced when it appears: the sheet stays open on a refusal, so nothing else on
+            screen changes to tell a screen-reader user the tap was rejected. */}
+        {error != null && (
+          <Text accessibilityLiveRegion="polite" style={styles.error}>
+            {error}
+          </Text>
+        )}
 
         <Pressable
           accessibilityRole="button"
@@ -210,5 +226,11 @@ const styles = StyleSheet.create({
   detailOk: { color: theme.ok },
   detailOut: { color: theme.danger },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.muted },
+  error: {
+    color: theme.danger,
+    fontSize: 14,
+    lineHeight: 20,
+    paddingVertical: theme.spacing.s,
+  },
   cancel: { color: theme.brand, fontSize: 17, fontWeight: "600" },
 });

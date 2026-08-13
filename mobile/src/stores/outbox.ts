@@ -97,7 +97,10 @@ type OutboxState = {
 // ApiError(200, 'UNKNOWN') on a truncated body — the write landed, so a retry would double the
 // clock-in — and ApiError(400, 'CONFIG') for a build with no EXPO_PUBLIC_API_URL, which is inlined
 // at build time and can never start working, so retrying it parks the queue forever.
-function retryable(status: number): boolean {
+// Exported for task 6.4's live tap, which must classify a failure identically to the replay of
+// that same item: the two disagreeing over one status is either a dropped shift or a duplicated
+// one. Shared rather than restated, for that reason alone.
+export function retryable(status: number): boolean {
   return status === 0 || status === 401 || status === 429 || status >= 500;
 }
 

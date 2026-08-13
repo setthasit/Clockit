@@ -1,6 +1,6 @@
 import * as Location from "expo-location";
 import { router, useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AppState,
   Linking,
@@ -14,6 +14,12 @@ import type { Fix } from "@/api/types";
 import { ClockButton } from "@/components/ClockButton";
 import { DistanceBadge } from "@/components/DistanceBadge";
 import { EmployerSheet } from "@/components/EmployerSheet";
+import {
+  type ClockResult,
+  clockInNow,
+  clockOutNow,
+  UNEXPECTED_ERROR,
+} from "@/lib/clockFlow";
 import { formatClock, formatDuration } from "@/lib/format";
 import { theme } from "@/lib/theme";
 import { getFix } from "@/location/fix";
@@ -40,6 +46,33 @@ export default function Clock() {
   // The sheet is controlled from here, not self-managing: task 6.4 needs to keep it open while a
   // request is in flight and close it only once the write lands.
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The actual concurrency guard. `busy` renders the spinner and inerts the controls, but state
+  // updates land on the next render, so two taps dispatched in one JS tick would both read
+  // `busy === false` and start two clock-ins — the single worst outcome this app has. A ref is
+  // written synchronously, so the second tap sees it before the first has awaited anything.
+  const inFlight = useRef(false);
+
+  const run = useCallback(async (act: () => Promise<ClockResult>) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const { done, message } = await act();
+      setError(message);
+      if (done) setSheetOpen(false);
+    } catch {
+      // clockFlow resolves rather than rejects for everything it owns, so this is a bug in ours
+      // (or in a phase-5 tracking hook). Caught anyway: the alternative is an unhandled rejection
+      // and a button that has already committed an optimistic write with no way to say so.
+      setError(UNEXPECTED_ERROR);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }, []);
 
   // Once per launch, not per focus: this tab is the navigator's first screen, so it mounts at
   // launch — and remounts if the gate drops the Stack for a spinner (_layout.tsx:141-147, which
@@ -230,16 +263,29 @@ export default function Clock() {
 
         <ClockButton
           label={openEntry ? "Clock out" : "Clock in"}
+          busy={busy}
           disabled={!granted}
-          // ponytail: opening the sheet is all this tap does today. Clock-out, and clocking in with
-          // no employers to choose between, are silent no-ops. Ceiling: the button looks broken for
-          // those two paths. Task 6.4 replaces the whole handler with the flow — getFix(), the
-          // mocked/accuracy pre-checks, the optimistic write, error mapping — and clocks the
-          // zero-membership case in directly, with no sheet.
+          // The sheet is the only branch: a clock-out has nothing to choose, and neither does a
+          // worker with no memberships — both go straight to the flow.
           onPress={() => {
-            if (!openEntry && hasEmployers) setSheetOpen(true);
+            if (openEntry) {
+              void run(() => clockOutNow(memberships ?? []));
+            } else if (hasEmployers) {
+              setError(null);
+              setSheetOpen(true);
+            } else {
+              void run(() => clockInNow(null, []));
+            }
           }}
         />
+
+        {/* On the screen only while the sheet is closed — an open sheet covers this, and renders
+            the same message itself. */}
+        {!sheetOpen && error != null && (
+          <Text accessibilityLiveRegion="polite" style={styles.error}>
+            {error}
+          </Text>
+        )}
 
         {blocked && (
           <View style={styles.blocked}>
@@ -278,10 +324,17 @@ export default function Clock() {
         visible={sheetOpen}
         memberships={memberships ?? []}
         fix={fix}
-        // ponytail: closes and drops the choice on the floor. Task 6.4 puts the clock-in here —
-        // employerId is null for a personal entry, and the sheet stays open while the request runs.
-        onSelect={() => setSheetOpen(false)}
-        onDismiss={() => setSheetOpen(false)}
+        busy={busy}
+        error={error}
+        // Stays open across the request and closes only once the write is committed — `run` closes
+        // it on `done`, so a refusal leaves the choice, and the message, in place.
+        onSelect={(employerId) =>
+          void run(() => clockInNow(employerId, memberships ?? []))
+        }
+        onDismiss={() => {
+          setSheetOpen(false);
+          setError(null);
+        }}
       />
     </View>
   );
@@ -320,6 +373,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing.l,
+  },
+  error: {
+    color: theme.danger,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "center",
   },
   blocked: { alignItems: "center", gap: theme.spacing.s },
   blockedText: {
