@@ -1,5 +1,6 @@
 import {createBrowserRouter, Navigate} from 'react-router';
 import {GuardedLayout} from './components/GuardedLayout';
+import {Shell} from './components/AppShell';
 import {SignInRoute} from './routes/sign-in';
 import {OnboardingRoute} from './routes/onboarding';
 import {CalendarRoute} from './routes/calendar';
@@ -12,14 +13,21 @@ export const router = createBrowserRouter([
   {
     element: <GuardedLayout />,
     children: [
-      {index: true, element: <Navigate to="/calendar" replace />},
+      // Outside the Shell: a user with zero employers has nothing to switch between
+      // and no nav destination that would load.
       {path: '/onboarding', element: <OnboardingRoute />},
-      {path: '/calendar', element: <CalendarRoute />},
-      {path: '/table', element: <TableRoute />},
-      {path: '/employees', element: <EmployeesRoute />},
-      {path: '/settings', element: <SettingsRoute />},
-      // Prod LB rewrites unknown paths to index.html, so typo'd deep links land here.
-      {path: '*', element: <Navigate to="/calendar" replace />},
+      {
+        element: <Shell />,
+        children: [
+          {index: true, element: <Navigate to="/calendar" replace />},
+          {path: '/calendar', element: <CalendarRoute />},
+          {path: '/table', element: <TableRoute />},
+          {path: '/employees', element: <EmployeesRoute />},
+          {path: '/settings', element: <SettingsRoute />},
+          // Prod LB rewrites unknown paths to index.html, so typo'd deep links land here.
+          {path: '*', element: <Navigate to="/calendar" replace />},
+        ],
+      },
     ],
   },
 ]);

@@ -6,11 +6,12 @@ import {Button} from '@astryxdesign/core/Button';
 import {Center} from '@astryxdesign/core/Center';
 import {Spinner} from '@astryxdesign/core/Spinner';
 import {api, setApiAuth} from '../lib/api';
+import {EMPLOYER_ID_KEY, EmployerContext} from '../lib/employer';
 import type {Employer} from '../lib/types';
 
-// ponytail: this doubles as the ApiProvider — every authenticated request is issued
-// under this layout, so a separate wrapper component would only add a file. Task 3.1
-// wraps the authenticated branch in AppShell and lifts `employers` into EmployerContext.
+// ponytail: this doubles as the ApiProvider and the EmployerContext provider — every
+// authenticated request is issued under this layout and the employer list is already
+// fetched here, so separate wrapper components would only add files and a second fetch.
 export function GuardedLayout() {
   const {isLoading, isAuthenticated, getAccessTokenSilently, loginWithRedirect} = useAuth0();
 
@@ -27,7 +28,20 @@ export function GuardedLayout() {
 
   const [employers, setEmployers] = useState<Employer[] | 'error' | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [selectedId, setSelectedId] = useState(() => localStorage.getItem(EMPLOYER_ID_KEY));
   const {pathname, search} = useLocation();
+
+  // Serves both the error Banner's Retry and EmployerContext.refresh(): re-running the
+  // fetch is the only way a just-created employer reaches the rest of the app.
+  const refresh = () => {
+    setEmployers(null);
+    setAttempt((n) => n + 1);
+  };
+
+  const setEmployerId = (id: string) => {
+    localStorage.setItem(EMPLOYER_ID_KEY, id);
+    setSelectedId(id);
+  };
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -68,15 +82,7 @@ export function GuardedLayout() {
           title="Could not load your account"
           description="Check your connection and try again."
           endContent={
-            <Button
-              label="Retry"
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                setEmployers(null);
-                setAttempt((n) => n + 1);
-              }}
-            />
+            <Button label="Retry" variant="secondary" size="sm" onClick={refresh} />
           }
         />
       </Center>
@@ -92,12 +98,18 @@ export function GuardedLayout() {
   }
 
   // Onboarding itself renders with zero employers — redirecting from it would loop.
-  // ponytail: this bounces task 3.2 back to /onboarding after a successful create,
-  // because `employers` is still the [] fetched at boot. 3.2 needs a refresh path;
-  // 3.1's EmployerContext is where it belongs.
+  // A create there calls refresh(), so the new employer lands before the next render.
   if (employers.length === 0 && pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />;
   }
 
-  return <Outlet />;
+  // Fall back to the first employer: a stored id can name one that was deleted or
+  // belongs to another account, and stranding the user on nothing is worse than a switch.
+  const employer = employers.find((e) => e.id === selectedId) ?? employers[0] ?? null;
+
+  return (
+    <EmployerContext value={{employers, employer, setEmployerId, refresh}}>
+      <Outlet />
+    </EmployerContext>
+  );
 }
