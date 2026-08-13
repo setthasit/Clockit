@@ -36,7 +36,17 @@ export function setApiAuth(handlers: {
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  if (getToken) headers.set('Authorization', `Bearer ${await getToken()}`);
+  if (getToken) {
+    try {
+      headers.set('Authorization', `Bearer ${await getToken()}`);
+    } catch {
+      // A lapsed SSO session rejects here (login_required) with no HTTP 401 ever
+      // sent, so this is the only path back to sign-in. The caught error is not
+      // logged: it can carry token and session detail.
+      onUnauthorized?.();
+      throw new ApiError(401, 'UNAUTHENTICATED', 'Your session expired. Please sign in again.');
+    }
+  }
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
   const res = await fetch(`${BASE_URL}${path}`, {...init, headers});

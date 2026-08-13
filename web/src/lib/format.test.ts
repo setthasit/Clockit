@@ -24,6 +24,9 @@ test('times render in the employer timezone, not the machine zone', () => {
   expect(timeRange(clockIn, clockOut, 'America/New_York')).toBe('9:02–17:35');
   expect(timeRange(clockIn, clockOut, 'Asia/Tokyo')).toBe('22:02–6:35');
   expect(timeRange(clockIn, null, 'America/New_York')).toBe('9:02–now');
+
+  // An unparseable clock-out is not an open shift: it must not render as "now".
+  expect(timeRange(clockIn, 'not-a-timestamp', 'America/New_York')).toBe('9:02–—');
 });
 
 test('dayLabel uses the employer timezone for instants and keeps report day keys intact', () => {
@@ -31,6 +34,8 @@ test('dayLabel uses the employer timezone for instants and keeps report day keys
   expect(dayLabel('2026-03-15T01:30:00Z', 'America/New_York')).toBe('Sat, Mar 14');
   expect(dayLabel('2026-03-15T01:30:00Z', 'Asia/Tokyo')).toBe('Sun, Mar 15');
 
-  // A YYYY-MM-DD report key is a calendar date and must never shift.
+  // A YYYY-MM-DD report key is a calendar date and must never shift — not in a zone
+  // behind UTC that would roll it back, nor in one ahead that would roll it forward.
   expect(dayLabel('2026-03-15', 'America/New_York')).toBe('Sun, Mar 15');
+  expect(dayLabel('2026-03-15', 'Asia/Tokyo')).toBe('Sun, Mar 15');
 });

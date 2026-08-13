@@ -6,8 +6,8 @@ const usd = new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'})
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
-function toDate(value: string | Date): Date | null {
-  const d = value instanceof Date ? value : new Date(value);
+function toDate(value: string): Date | null {
+  const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
@@ -22,11 +22,16 @@ export function minutesToHM(minutes: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
-/** Day header label — "Sun, Mar 15". Accepts an instant or a YYYY-MM-DD report day key. */
-export function dayLabel(date: string | Date, tz: string): string {
+/**
+ * Day header label — "Sun, Mar 15". Accepts an ISO instant or a YYYY-MM-DD report
+ * day key. String-only on purpose: a Date carrying the same calendar date takes the
+ * instant branch and renders the day before it in western zones. All wire data is
+ * JSON strings, so pass the raw value through rather than round-tripping via Date.
+ */
+export function dayLabel(date: string, tz: string): string {
   // A YYYY-MM-DD value is a calendar date, not an instant: it parses as UTC
   // midnight, and re-zoning that into a western tz would render the day before.
-  const dateOnly = typeof date === 'string' && DATE_ONLY.test(date);
+  const dateOnly = DATE_ONLY.test(date);
   const d = toDate(dateOnly ? `${date}T00:00:00Z` : date);
   if (!d) return '—';
 
@@ -39,7 +44,7 @@ export function dayLabel(date: string | Date, tz: string): string {
 }
 
 /** Shift bounds — "9:02–17:35"; an open shift (no clock-out) renders "9:02–now". */
-export function timeRange(inISO: string | Date, outISO: string | Date | null | undefined, tz: string): string {
+export function timeRange(inISO: string, outISO: string | null | undefined, tz: string): string {
   const start = clock(inISO, tz);
   if (!start) return '—';
   const end = outISO ? (clock(outISO, tz) ?? '—') : 'now';
@@ -47,7 +52,7 @@ export function timeRange(inISO: string | Date, outISO: string | Date | null | u
 }
 
 // ponytail: a formatter per call; memoize by tz only if the calendar grid measures slow.
-function clock(value: string | Date, tz: string): string | null {
+function clock(value: string, tz: string): string | null {
   const d = toDate(value);
   if (!d) return null;
 
