@@ -38,7 +38,7 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 5.2: Clock-out
   - [x] 5.3: List + assign-employer
   - [x] 5.4: Pings (batch)
-  - [ ] 5.5: Employer entries view
+  - [x] 5.5: Employer entries view
   - [ ] 5.6: Tests
 - [ ] Task 6: Tip domain
   - [ ] 6.1: `split.go` (largest-remainder split) + unit tests
