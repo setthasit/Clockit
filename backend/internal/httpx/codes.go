@@ -33,6 +33,13 @@ func StaleTimestamp() *AppError {
 	return &AppError{Status: http.StatusUnprocessableEntity, Code: "STALE_TIMESTAMP", Message: "location fix too old"}
 }
 
+// QueuedTooOld is its own code because the advice differs: STALE_TIMESTAMP means
+// "check the device clock", while a two-week-old outbox item has a correct clock
+// and no client-side remedy at all.
+func QueuedTooOld() *AppError {
+	return &AppError{Status: http.StatusUnprocessableEntity, Code: "QUEUED_TOO_OLD", Message: "offline entry is too old to sync — ask your employer to add it manually"}
+}
+
 // OutOfRange reports meters as integers: sub-meter precision is noise to a
 // human reading "1800 m from anchor", and leaks nothing extra.
 func OutOfRange(distanceM, limitM float64) *AppError {

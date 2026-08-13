@@ -301,6 +301,7 @@ func newTestAPI(t *testing.T) *testAPI {
 		AnchorRadiusM: 1000,
 		// High enough that no test trips the limiter; the limiter itself is
 		// covered in valkeyx.
+		MaxQueuedAge:    72 * time.Hour,
 		SpeedAnomalyKMH: 200,
 		RateLimitPerMin: 1000,
 	}
@@ -398,22 +399,30 @@ func decodeEntry(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int) e
 // clockJSON builds a clock-in/clock-out body. Coordinates go through
 // FormatFloat rather than a %f verb so a fixture derived from northOffset
 // arrives at the server with the distance the test computed.
-func clockJSON(clientID, employerID string, at time.Time, lat, lng float64) string {
+func clockJSON(clientID, employerID string, at time.Time, lat, lng float64, queued bool) string {
 	employerField := ""
 	if employerID != "" {
 		employerField = fmt.Sprintf("%q:%q,", "employer_id", employerID)
 	}
-	return fmt.Sprintf(`{%s"client_id":%q,"at":%q,"loc":{"lat":%s,"lng":%s,"accuracy":10},"mocked":false}`,
+	return fmt.Sprintf(`{%s"client_id":%q,"at":%q,"loc":{"lat":%s,"lng":%s,"accuracy":10},"mocked":false,"queued":%t}`,
 		employerField, clientID, at.Format(time.RFC3339Nano),
-		strconv.FormatFloat(lat, 'f', -1, 64), strconv.FormatFloat(lng, 'f', -1, 64))
+		strconv.FormatFloat(lat, 'f', -1, 64), strconv.FormatFloat(lng, 'f', -1, 64), queued)
 }
 
 func (a *testAPI) clockIn(token, clientID, employerID string, at time.Time, lat, lng float64) *httptest.ResponseRecorder {
-	return a.do(http.MethodPost, "/v1/entries/clock-in", token, clockJSON(clientID, employerID, at, lat, lng))
+	return a.do(http.MethodPost, "/v1/entries/clock-in", token, clockJSON(clientID, employerID, at, lat, lng, false))
 }
 
 func (a *testAPI) clockOut(token, clientID string, at time.Time, lat, lng float64) *httptest.ResponseRecorder {
-	return a.do(http.MethodPost, "/v1/entries/clock-out", token, clockJSON(clientID, "", at, lat, lng))
+	return a.do(http.MethodPost, "/v1/entries/clock-out", token, clockJSON(clientID, "", at, lat, lng, false))
+}
+
+func (a *testAPI) clockInQueued(token, clientID string, at time.Time, lat, lng float64) *httptest.ResponseRecorder {
+	return a.do(http.MethodPost, "/v1/entries/clock-in", token, clockJSON(clientID, "", at, lat, lng, true))
+}
+
+func (a *testAPI) clockOutQueued(token, clientID string, at time.Time, lat, lng float64) *httptest.ResponseRecorder {
+	return a.do(http.MethodPost, "/v1/entries/clock-out", token, clockJSON(clientID, "", at, lat, lng, true))
 }
 
 func (a *testAPI) createEmployer(t *testing.T, token string, anchor employer.LatLng) string {
@@ -493,6 +502,59 @@ func TestClockInReplayReturnsTheOriginalEntry(t *testing.T) {
 	}
 	if n := api.countEntries(t); n != 1 {
 		t.Fatalf("stored %d entries, want 1", n)
+	}
+}
+
+// The offline promise (design §5.3): a shift captured in airplane mode syncs
+// hours later with its real capture time, and the employer is told the hours
+// were asserted after the fact rather than measured live.
+func TestQueuedClockEventsSyncAndAreFlagged(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "offline@example.com")
+	now := time.Now().UTC()
+
+	opened := decodeEntry(t, api.clockInQueued(token, "c-1", now.Add(-3*time.Hour), vanLat, vanLng),
+		http.StatusCreated)
+	if flags := api.storedEntry(t, opened.ID).Flags; len(flags) != 1 || flags[0] != flagBackdated {
+		t.Fatalf("flags = %v, want [%s]", flags, flagBackdated)
+	}
+
+	// Closing the same shift is backdated too, but the entry already carries the
+	// flag: the employer sees one mark, not one per event.
+	closed := api.clockOutQueued(token, "close-1", now.Add(-2*time.Hour), vanLat, vanLng)
+	if got := decodeEntry(t, closed, http.StatusOK); got.ID != opened.ID {
+		t.Fatalf("entry = %+v, want %s closed", got, opened.ID)
+	}
+	stored := api.storedEntry(t, opened.ID)
+	if len(stored.Flags) != 1 || stored.Flags[0] != flagBackdated {
+		t.Fatalf("flags = %v, want exactly [%s]", stored.Flags, flagBackdated)
+	}
+	if stored.ClockIn.At.Sub(now.Add(-3*time.Hour)).Abs() > time.Millisecond {
+		t.Fatalf("clock_in.at = %s, want the capture time, not the flush time", stored.ClockIn.At)
+	}
+
+	// An outbox item that flushes promptly is the common case and is not
+	// backdated: flagging it would make the flag noise.
+	prompt := decodeEntry(t, api.clockInQueued(token, "c-2", now.Add(-time.Minute), vanLat, vanLng),
+		http.StatusCreated)
+	if flags := api.storedEntry(t, prompt.ID).Flags; len(flags) != 0 {
+		t.Fatalf("flags = %v, want none for a fresh queued event", flags)
+	}
+}
+
+// The backdating bound: hours are money, so a client-asserted "this was queued"
+// cannot reach back indefinitely.
+func TestQueuedClockInBeyondTheBackdatingBound(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "ancient@example.com")
+
+	assertErrorCode(t, api.clockInQueued(token, "c-1", time.Now().UTC().Add(-80*time.Hour), vanLat, vanLng),
+		http.StatusUnprocessableEntity, "QUEUED_TOO_OLD")
+	// A queued event still may not come from the future.
+	assertErrorCode(t, api.clockInQueued(token, "c-2", time.Now().UTC().Add(time.Hour), vanLat, vanLng),
+		http.StatusUnprocessableEntity, "STALE_TIMESTAMP")
+	if n := api.countEntries(t); n != 0 {
+		t.Fatalf("stored %d entries, want none", n)
 	}
 }
 

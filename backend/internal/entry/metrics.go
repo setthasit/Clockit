@@ -42,6 +42,7 @@ var proximityReasons = map[string]bool{
 	"MOCKED_LOCATION": true,
 	"LOW_ACCURACY":    true,
 	"STALE_TIMESTAMP": true,
+	"QUEUED_TOO_OLD":  true,
 	"OUT_OF_RANGE":    true,
 }
 

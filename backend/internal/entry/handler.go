@@ -88,6 +88,10 @@ type clockRequest struct {
 	At         time.Time `json:"at"`
 	Loc        *locBody  `json:"loc"`
 	Mocked     bool      `json:"mocked"`
+	// Queued is set by the mobile outbox when it replays an action captured
+	// offline, which is what lets `at` stay the real capture time instead of
+	// the flush time — the capture time is the payroll record (design §5.3).
+	Queued bool `json:"queued"`
 }
 
 // ponytail: presence and length only; clients send a UUIDv4 and the unique
@@ -121,7 +125,14 @@ func (r *clockRequest) fix() (Fix, error) {
 	if *r.Loc.Accuracy < 0 {
 		return Fix{}, httpx.Invalid("accuracy must not be negative")
 	}
-	return Fix{Lat: loc.Lat, Lng: loc.Lng, AccuracyM: *r.Loc.Accuracy, At: msTime(r.At), Mocked: r.Mocked}, nil
+	return Fix{
+		Lat:       loc.Lat,
+		Lng:       loc.Lng,
+		AccuracyM: *r.Loc.Accuracy,
+		At:        msTime(r.At),
+		Mocked:    r.Mocked,
+		Queued:    r.Queued,
+	}, nil
 }
 
 // latLng checks presence and range. Accuracy is the caller's business: a clock
@@ -199,7 +210,25 @@ func (h *Handler) clockIn(c echo.Context, obs *clockObs) error {
 		obs.replay = true
 		return h.respond(c, http.StatusOK, u, e)
 	}
+	if err := h.markBackdated(ctx, e, fix); err != nil {
+		return err
+	}
 	return h.respond(c, http.StatusCreated, u, e)
+}
+
+// markBackdated flags a shift whose timestamp only passed because the client
+// said it was queued. Only events genuinely older than the freshness rule are
+// marked: flagging every offline replay — most of which flush seconds later —
+// would bury the employer in a signal they would learn to ignore.
+func (h *Handler) markBackdated(ctx context.Context, e *Entry, f Fix) error {
+	if !f.Queued || time.Since(f.At) <= h.cfg.MaxClockSkew || slices.Contains(e.Flags, flagBackdated) {
+		return nil
+	}
+	if err := h.store.Flag(ctx, e, flagBackdated); err != nil {
+		return err
+	}
+	e.Flags = append(e.Flags, flagBackdated)
+	return nil
 }
 
 func (h *Handler) ClockOut(c echo.Context) error {
@@ -263,6 +292,9 @@ func (h *Handler) clockOut(c echo.Context, obs *clockObs) error {
 		return h.closedOrConflict(c, u, clientID, obs)
 	}
 	if err != nil {
+		return err
+	}
+	if err := h.markBackdated(ctx, e, fix); err != nil {
 		return err
 	}
 	// 200, not 201: closing a shift updates the entry created at clock-in.

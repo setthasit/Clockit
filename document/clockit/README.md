@@ -25,7 +25,7 @@ Phases 3 and 4 are independent of each other and can run in parallel once phase 
 { "error": { "code": "OUT_OF_RANGE", "message": "1.8 km from Acme Cafe", "details": { "distance_m": 1800 } } }
 ```
 
-- **Validation constants** (env-overridable, defaults): `MAX_ACCURACY_M=100`, `MAX_CLOCK_SKEW=5m`, `ANCHOR_RADIUS_M=1000`, `SPEED_ANOMALY_KMH=200`.
+- **Validation constants** (env-overridable, defaults): `MAX_ACCURACY_M=100`, `MAX_CLOCK_SKEW=5m`, `MAX_QUEUED_AGE=72h`, `ANCHOR_RADIUS_M=1000`, `SPEED_ANOMALY_KMH=200`.
 - Never log or return: hourly rates (outside employer-owned routes), decrypted coordinates, phone numbers, DEKs.
 - If a library API doesn't match what a plan shows, check the library's current docs and adapt — do not force outdated snippets. Note deviations in the phase's completion notes.
 

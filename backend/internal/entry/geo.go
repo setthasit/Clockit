@@ -12,10 +12,15 @@ import (
 const earthRadiusM = 6371000
 
 // Fix is one device location reading submitted with a clock event or ping.
+//
+// Queued marks a reading the client captured offline and replayed later. It is
+// a client assertion, so it buys exactly one thing: the freshness rule is
+// widened to cfg.MaxQueuedAge. Every other rule still applies.
 type Fix struct {
 	Lat, Lng, AccuracyM float64
 	At                  time.Time
 	Mocked              bool
+	Queued              bool
 }
 
 func haversineM(lat1, lng1, lat2, lng2 float64) float64 {
@@ -40,7 +45,20 @@ func ValidateFix(cfg config.Config, now time.Time, f Fix, anchor *employer.LatLn
 	if f.AccuracyM > float64(cfg.MaxAccuracyM) {
 		return httpx.LowAccuracy()
 	}
-	if skew := now.Sub(f.At); skew > cfg.MaxClockSkew || skew < -cfg.MaxClockSkew {
+	// The past bound is the only half a queued event may widen: an outbox item
+	// is old by construction (design §5.3), but nothing legitimate captures a
+	// fix in the future, and a clock running fast is still a broken clock.
+	maxAge := cfg.MaxClockSkew
+	if f.Queued {
+		maxAge = cfg.MaxQueuedAge
+	}
+	switch age := now.Sub(f.At); {
+	case age < -cfg.MaxClockSkew:
+		return httpx.StaleTimestamp()
+	case age > maxAge:
+		if f.Queued {
+			return httpx.QueuedTooOld()
+		}
 		return httpx.StaleTimestamp()
 	}
 	if anchor != nil && !WithinAnchor(cfg, employer.LatLng{Lat: f.Lat, Lng: f.Lng}, *anchor) {

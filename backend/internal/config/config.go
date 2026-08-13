@@ -20,6 +20,10 @@ type Config struct {
 	OTelServiceName string
 	MaxAccuracyM    int
 	MaxClockSkew    time.Duration
+	// MaxQueuedAge bounds how far back an offline-queued clock event may be
+	// backdated. Hours are money, so a waived freshness rule still needs a
+	// ceiling (design §4.5 rule 3, §5.3).
+	MaxQueuedAge    time.Duration
 	AnchorRadiusM   int
 	SpeedAnomalyKMH int
 	RateLimitPerMin int
@@ -53,6 +57,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.MaxClockSkew, err = getdur("MAX_CLOCK_SKEW", 5*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxQueuedAge, err = getdur("MAX_QUEUED_AGE", 72*time.Hour); err != nil {
 		return Config{}, err
 	}
 

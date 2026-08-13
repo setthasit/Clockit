@@ -95,8 +95,8 @@ Employee:
 | ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | GET    | `/v1/me`                | Profile + memberships (employer id, name, anchor lat/lng) — anchor lets the app show live distance before clock-in |
 | PATCH  | `/v1/me`                | `{name?, phone?}`                                                                                                  |
-| POST   | `/v1/entries/clock-in`  | `{client_id, employer_id?, at, loc:{lat,lng,accuracy}, mocked}`                                                    |
-| POST   | `/v1/entries/clock-out` | `{client_id, at, loc, mocked}` — closes the open entry                                                             |
+| POST   | `/v1/entries/clock-in`  | `{client_id, employer_id?, at, loc:{lat,lng,accuracy}, mocked, queued?}`                                           |
+| POST   | `/v1/entries/clock-out` | `{client_id, at, loc, mocked, queued?}` — closes the open entry                                                    |
 | GET    | `/v1/entries?from&to`   | Own entries                                                                                                        |
 | PATCH  | `/v1/entries/{id}`      | `{employer_id}` — assign employer to a personal entry later                                                        |
 | POST   | `/v1/pings`             | `{pings:[{at, loc}]}` — batched background pings, attached to the open entry                                       |
@@ -167,7 +167,7 @@ Clock-in/out validation (hard reject with a typed error the app can render):
 
 1. `mocked == true` → reject (`Location.getCurrentPositionAsync` exposes the Android mock flag; iOS has no reliable equivalent — see hardening).
 2. `accuracy > 100 m` → reject ("move outdoors / enable precise location").
-3. `|at - server_now| > 5 min` → reject (stale/replayed fix).
+3. `|at - server_now| > 5 min` → reject (stale/replayed fix). Exception for §5.3: a body with `queued: true` is an outbox item captured offline, and `at` must stay the real capture time (it is the payroll record), so the *past* bound widens to `MAX_QUEUED_AGE` (72 h) — past that it is rejected with `QUEUED_TOO_OLD`, and the future bound stays 5 min. Only this rule is relaxed; an accepted queued event older than 5 min gets a `backdated` flag so the employer sees hours that were asserted rather than measured.
 4. Anchor rule:
    - **With employer**: haversine(fix, employer anchor) ≤ 1000 m, else reject with the actual distance.
    - **No employer**: clock-in always passes and its location _becomes_ the anchor; clock-out must be within 1000 m of it.

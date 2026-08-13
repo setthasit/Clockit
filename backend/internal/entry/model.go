@@ -13,6 +13,12 @@ const (
 	// flagSpeedAnomaly marks a shift whose breadcrumbs imply travel nobody made
 	// on foot. Advisory only: the employer reviews it, the API never rejects it.
 	flagSpeedAnomaly = "speed_anomaly"
+
+	// flagBackdated marks a shift where a queued event was accepted past the
+	// freshness rule, so the hours were asserted after the fact rather than
+	// measured live. Bounding the backdating stops the unbounded version of the
+	// fraud; this is what stops the bounded one from being invisible.
+	flagBackdated = "backdated"
 )
 
 // ClockPoint is one end of a shift. LocEnc holds {lat, lng} sealed with the

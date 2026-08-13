@@ -24,7 +24,12 @@ func eastOffset(m, atLat float64) float64 {
 }
 
 func geoCfg() config.Config {
-	return config.Config{MaxAccuracyM: 100, MaxClockSkew: 5 * time.Minute, AnchorRadiusM: 1000}
+	return config.Config{
+		MaxAccuracyM:  100,
+		MaxClockSkew:  5 * time.Minute,
+		MaxQueuedAge:  72 * time.Hour,
+		AnchorRadiusM: 1000,
+	}
 }
 
 func TestHaversineKnownDistances(t *testing.T) {
@@ -80,6 +85,12 @@ func TestValidateFixAccepts(t *testing.T) {
 		{"future skew at the limit", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(5 * time.Minute)}, anchor},
 		{"rounds down to the radius", Fix{Lat: vanLat + northOffset(1000.4), Lng: vanLng, AccuracyM: 10, At: now}, anchor},
 		{"no anchor skips distance", Fix{Lat: 13.7563, Lng: 100.5018, AccuracyM: 10, At: now}, nil},
+
+		// A queued event is old by construction: it was captured offline and
+		// replayed when connectivity came back (design §5.3).
+		{"queued past the skew window", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(-6 * time.Minute), Queued: true}, anchor},
+		{"queued a weekend offline", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(-48 * time.Hour), Queued: true}, anchor},
+		{"queued exactly at the backdating bound", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(-72 * time.Hour), Queued: true}, anchor},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -114,6 +125,14 @@ func TestValidateFixRejections(t *testing.T) {
 		{"mocked beats everything", Fix{Lat: far.Lat, Lng: far.Lng, AccuracyM: 500, At: now.Add(-time.Hour), Mocked: true}, anchor, "MOCKED_LOCATION"},
 		{"accuracy beats stale and range", Fix{Lat: far.Lat, Lng: far.Lng, AccuracyM: 500, At: now.Add(-time.Hour)}, anchor, "LOW_ACCURACY"},
 		{"stale beats range", Fix{Lat: far.Lat, Lng: far.Lng, AccuracyM: 10, At: now.Add(-time.Hour)}, anchor, "STALE_TIMESTAMP"},
+
+		// Queued waives the freshness rule and nothing else.
+		{"queued beyond the backdating bound", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(-72*time.Hour - time.Second), Queued: true}, anchor, "QUEUED_TOO_OLD"},
+		{"queued a fortnight ago", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(-14 * 24 * time.Hour), Queued: true}, anchor, "QUEUED_TOO_OLD"},
+		{"queued in the future", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(5*time.Minute + time.Second), Queued: true}, anchor, "STALE_TIMESTAMP"},
+		{"queued and mocked", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(-time.Hour), Queued: true, Mocked: true}, anchor, "MOCKED_LOCATION"},
+		{"queued and inaccurate", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 100.1, At: now.Add(-time.Hour), Queued: true}, anchor, "LOW_ACCURACY"},
+		{"queued and out of range", Fix{Lat: far.Lat, Lng: far.Lng, AccuracyM: 10, At: now.Add(-time.Hour), Queued: true}, anchor, "OUT_OF_RANGE"},
 
 		{"NaN coordinate", Fix{Lat: math.NaN(), Lng: vanLng, AccuracyM: 10, At: now}, anchor, "INVALID_ARGUMENT"},
 		{"NaN accuracy", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: math.NaN(), At: now}, anchor, "INVALID_ARGUMENT"},
