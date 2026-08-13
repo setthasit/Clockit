@@ -63,13 +63,12 @@ export function SettingsRoute() {
         method: 'PATCH',
         body: JSON.stringify(patch),
       });
-      // The saved employer, not the typed one: the backend trims the name, so re-seeding
-      // from the request would leave " Acme " differing from "Acme" forever and every
-      // later save would resend a name that never changed.
       updateEmployer(saved);
-      setName(saved.name);
-      setTimezone(saved.timezone);
-      setAnchor(saved.anchor);
+      // The name is the only field the server rewrites (it trims), so it is the only one
+      // worth re-seeding: without it " Acme " would differ from "Acme" forever and every
+      // later save would resend a name that never changed. Timezone and anchor come back
+      // verbatim. The inputs stay live during the save, so keep anything typed since.
+      setName((current) => (current.trim() === saved.name ? saved.name : current));
       toast({body: 'Settings saved.'});
     } catch (e) {
       setError(saveErrorMessage(e));
@@ -110,7 +109,8 @@ export function SettingsRoute() {
         </VStack>
 
         {/* Beside the button, not at the top of the form: the map and coordinate fields
-            put over 1000 px between the two, so a submit error up there is off-screen. */}
+            put most of a screen between the two, so a submit error up there is scrolled
+            out of view by the time the button is reachable. */}
         <VStack gap={3}>
           {error && <Banner status="error" title={error} />}
 
@@ -134,9 +134,12 @@ export function SettingsRoute() {
 
 function saveErrorMessage(e: unknown): string {
   if (!(e instanceof ApiError)) return 'Could not save these settings. Try again.';
-  // The backend's 429 message is "too many requests", which offers no way forward; every
-  // other ApiError message names the field or the fault and is worth showing as-is.
-  return e.status === 429
-    ? 'Too many changes just now. Wait a minute, then save again.'
-    : e.message;
+  // Keyed off code, not status: the error catalog is the contract clients are meant to
+  // branch on. These two messages ("too many requests", "not found") offer no way
+  // forward; every other one names the field or the fault and is worth showing as-is.
+  if (e.code === 'RATE_LIMITED') return 'Too many changes just now. Wait a minute, then save again.';
+  if (e.code === 'NOT_FOUND') {
+    return 'This employer is no longer available. Pick another one from the employer menu.';
+  }
+  return e.message;
 }
