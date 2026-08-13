@@ -46,8 +46,8 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 6.3: Tests
 - [x] Task 7: Custom telemetry
   - [x] 7.1: Domain counters + span attributes
-- [ ] Task 8: Seed command
-  - [ ] 8.1: `cmd/seed/main.go`
+- [x] Task 8: Seed command
+  - [x] 8.1: `cmd/seed/main.go`
 - [ ] Task 9: Verification
 
 ## Implementation Details
