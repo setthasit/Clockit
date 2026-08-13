@@ -63,6 +63,13 @@ export async function getFix(): Promise<Fix> {
     // was taken and lands in `at`, so an older one comes back STALE_TIMESTAMP.
     const p = await Promise.race([
       Location.getCurrentPositionAsync({
+        // ponytail: Highest is one step below BestForNavigation against a library default of
+        // Balanced, and the clock screen's badge runs a full GNSS session on it every 15 s while
+        // focused. Kept anyway: Balanced is ~100 m, exactly the server's MAX_ACCURACY_M, so a
+        // badge polling at a coarser accuracy would predict against a different fix than the one
+        // task 6.4 sends and the server judges. Ceiling: battery on a screen left open. Upgrade:
+        // an optional accuracy argument here defaulted to Highest, if device measurement ever
+        // shows the drain is real.
         accuracy: Location.Accuracy.Highest,
         // Android otherwise opens a system settings dialog and waits for the user before it
         // even asks for a location, putting reading time inside the 15 s below.

@@ -29,6 +29,11 @@ export function DistanceBadge({ memberships, fix }: Props) {
   // decides, so alarming them here would be noise. Ceiling: no way to tell "still trying" from
   // "will never work". Upgrade path: task 6.4 gets the same rejection at tap time, where it *is*
   // actionable, and can show the message with the retry.
+  //
+  // fix.accuracy is deliberately not consulted below either, so a 150 m-accuracy indoor fix can
+  // render "80 m — in range". That costs a dialog and never a server rejection: task 6.4 catches
+  // accuracy > 100 locally with a "GPS weak — try anyway?" confirm before any request, and owns
+  // that check for both this badge and the EmployerSheet.
   if (!fix) {
     return (
       <View style={styles.badge}>

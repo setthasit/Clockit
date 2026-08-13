@@ -13,6 +13,7 @@ import {
 import type { Fix } from "@/api/types";
 import { ClockButton } from "@/components/ClockButton";
 import { DistanceBadge } from "@/components/DistanceBadge";
+import { EmployerSheet } from "@/components/EmployerSheet";
 import { formatClock, formatDuration } from "@/lib/format";
 import { theme } from "@/lib/theme";
 import { getFix } from "@/location/fix";
@@ -36,6 +37,9 @@ export default function Clock() {
   // badge and the sheet both take this as a prop and do their own arithmetic with distanceM.
   const [fix, setFix] = useState<Fix | null>(null);
   const [foreground, setForeground] = useState(true);
+  // The sheet is controlled from here, not self-managing: task 6.4 needs to keep it open while a
+  // request is in flight and close it only once the write lands.
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   // Once per launch, not per focus: this tab is the navigator's first screen, so it mounts at
   // launch — and remounts if the gate drops the Stack for a spinner (_layout.tsx:141-147, which
@@ -132,7 +136,8 @@ export default function Clock() {
   // with no anchor to measure against, or without permission — and nothing to show means nothing to
   // poll. The badge keeps its last reading across a transient "inactive", so `foreground` gates the
   // polling only, not the rendering.
-  const showDistance = !openEntry && (memberships?.length ?? 0) > 0 && granted;
+  const hasEmployers = (memberships?.length ?? 0) > 0;
+  const showDistance = !openEntry && hasEmployers && granted;
   const polling = showDistance && foreground;
 
   // Self-chaining timeout, not setInterval: getFix() is bounded by its own 15 s race, exactly the
@@ -141,6 +146,11 @@ export default function Clock() {
   // impossible without a generation counter (stores/clock.ts) — the `cancelled` flag from
   // _layout.tsx is all that is left to need, since only teardown can now race a result. A slow or
   // timing-out fix backs the cadence off on its own, which is the right direction for battery.
+  //
+  // "Impossible" holds *within* a chain, not across a teardown and restart: a discarded in-flight
+  // getFix() still runs natively (fix.ts:60-63), so a background→foreground or blur→focus cycle can
+  // leave two native reads overlapping, and rapid tab churn fires one unthrottled read per focus.
+  // Not worth a lastReadAt ref — but tasks 6.3 and 6.4 must not inherit the stronger reading.
   //
   // First read fires immediately: waiting 15 s to say anything would mean the badge is still
   // "Checking distance…" for most of the time a worker spends on this screen before tapping.
@@ -221,8 +231,14 @@ export default function Clock() {
         <ClockButton
           label={openEntry ? "Clock out" : "Clock in"}
           disabled={!granted}
-          // Task 6.4 owns the flow: employer sheet, getFix(), optimistic write, error mapping.
-          onPress={() => {}}
+          // ponytail: opening the sheet is all this tap does today. Clock-out, and clocking in with
+          // no employers to choose between, are silent no-ops. Ceiling: the button looks broken for
+          // those two paths. Task 6.4 replaces the whole handler with the flow — getFix(), the
+          // mocked/accuracy pre-checks, the optimistic write, error mapping — and clocks the
+          // zero-membership case in directly, with no sheet.
+          onPress={() => {
+            if (!openEntry && hasEmployers) setSheetOpen(true);
+          }}
         />
 
         {blocked && (
@@ -254,6 +270,19 @@ export default function Clock() {
           </View>
         )}
       </View>
+
+      {/* Same `fix` as the badge — one poller on this screen, two consumers, each doing its own
+          arithmetic with distanceM. Renders nothing at all without memberships, which it enforces
+          itself. */}
+      <EmployerSheet
+        visible={sheetOpen}
+        memberships={memberships ?? []}
+        fix={fix}
+        // ponytail: closes and drops the choice on the floor. Task 6.4 puts the clock-in here —
+        // employerId is null for a personal entry, and the sheet stays open while the request runs.
+        onSelect={() => setSheetOpen(false)}
+        onDismiss={() => setSheetOpen(false)}
+      />
     </View>
   );
 }
