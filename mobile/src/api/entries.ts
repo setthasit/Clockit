@@ -29,6 +29,12 @@ type ClockBody = {
   at: string;
   loc: LatLng & {accuracy: number};
   mocked: boolean;
+  /** Set only by an outbox replay (task 5.2), never by a live tap. It widens the *past*
+   * staleness bound to MAX_QUEUED_AGE (72 h, then `QUEUED_TOO_OLD` 422) — mock, accuracy,
+   * anchor and the future bound all still apply — and an accepted event older than
+   * MAX_CLOCK_SKEW gets a `backdated` flag the employer sees, which is why a live tap must
+   * leave it off. See backend/internal/entry/geo.go ValidateFix. */
+  queued?: boolean;
 };
 
 export type ClockInBody = ClockBody & {
