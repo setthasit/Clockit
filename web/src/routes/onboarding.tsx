@@ -11,17 +11,11 @@ import {TextInput} from '@astryxdesign/core/TextInput';
 import {MapAnchorPicker, type AnchorValue} from '../components/MapAnchorPicker';
 import {api, ApiError} from '../lib/api';
 import {useEmployer} from '../lib/employer';
+import {timezoneOptions} from '../lib/timezones';
 import type {Employer} from '../lib/types';
 
 const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
-const IANA_TIMEZONES = Intl.supportedValuesOf('timeZone');
-
-// Some browsers still resolve to a non-canonical alias ("Asia/Calcutta") that
-// supportedValuesOf() omits. The backend accepts those, so the only thing missing them
-// costs is a select that opens blank on the value it is already set to.
-const TIMEZONE_OPTIONS = IANA_TIMEZONES.includes(BROWSER_TIMEZONE)
-  ? IANA_TIMEZONES
-  : [BROWSER_TIMEZONE, ...IANA_TIMEZONES];
+const TIMEZONE_OPTIONS = timezoneOptions(BROWSER_TIMEZONE);
 
 const NO_ANCHOR: AnchorValue = {lat: null, lng: null};
 

@@ -14,6 +14,13 @@ export interface EmployerState {
    * so there is nothing a refetch would add.
    */
   addEmployer: (employer: Employer) => void;
+  /**
+   * Replaces an edited employer in place, synchronously — Settings' save path. Same
+   * reasoning as addEmployer: PATCH returns the full employer, so a refetch would add
+   * nothing, and refresh() only *schedules* one, leaving the top-bar name and the
+   * timezone the calendar and table bucket by stale until it lands.
+   */
+  updateEmployer: (employer: Employer) => void;
   /** Re-fetches GET /v1/employers. Recovery from a failed load. */
   refresh: () => void;
 }

@@ -76,6 +76,14 @@ export function GuardedLayout() {
     [setEmployerId],
   );
 
+  // Settings' save path. No setEmployerId: an edit can only reach the employer that is
+  // already active, so the selection is unchanged.
+  const updateEmployer = useCallback((employer: Employer) => {
+    setEmployers((prev) =>
+      Array.isArray(prev) ? prev.map((e) => (e.id === employer.id ? employer : e)) : prev,
+    );
+  }, []);
+
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -109,9 +117,10 @@ export function GuardedLayout() {
       employer: employerList.find((e) => e.id === selectedId) ?? employerList[0] ?? null,
       setEmployerId,
       addEmployer,
+      updateEmployer,
       refresh,
     }),
-    [employerList, selectedId, setEmployerId, addEmployer, refresh],
+    [employerList, selectedId, setEmployerId, addEmployer, updateEmployer, refresh],
   );
 
   if (isLoading) {
