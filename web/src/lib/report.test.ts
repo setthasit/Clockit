@@ -123,6 +123,12 @@ test('rows: a line per day and member, and the range total is the sum of the day
   // Both of the day's shifts land on the one member row, in the order they were worked.
   const worked = rows[1];
   expect(worked.times).toBe('9:02–12:00, 13:00–17:35');
+  // The same join, carried rather than left to be rebuilt: the CSV needs each shift's two
+  // instants as separate columns, and re-deriving the bucket key would couple it to the
+  // shape of `key`. Summary rows stand for no shift of their own.
+  expect(worked.shifts.map((e) => e.id)).toEqual(['morning', 'afternoon']);
+  expect(rows[0].shifts).toEqual([]);
+  expect(rows.at(-1)!.shifts).toEqual([]);
   // Either shift outside the anchor lights the dot; here it is the afternoon one.
   expect(worked.isUnverified).toBe(true);
 

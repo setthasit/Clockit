@@ -87,7 +87,7 @@ export function TableRoute() {
   // range while it loads and suppress the spinner, making a live request read as settled.
   const [failedRange, setFailedRange] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  // The request this state answers, `from|to|attempt`. A tip save bumps attempt and leaves
+  // The request this state answers, `from|to|attempt|tz`. A tip save bumps attempt and leaves
   // the old rows on screen while the refetch runs (see TipCell), so for those two requests
   // the day's pool and the shares beside it disagree. On screen that is momentary; in a
   // downloaded file it is permanent and unmarked, so the export waits for the answer.
@@ -128,7 +128,7 @@ export function TableRoute() {
         if (!cancelled) setFailedRange(`${from}|${to}`);
       })
       .finally(() => {
-        if (!cancelled) setSettled(`${from}|${to}|${attempt}`);
+        if (!cancelled) setSettled(`${from}|${to}|${attempt}|${tz}`);
       });
 
     return () => {
@@ -138,7 +138,7 @@ export function TableRoute() {
 
   const loaded = report?.range === `${from}|${to}` ? report : null;
   const hasFailed = failedRange === `${from}|${to}`;
-  const isFetching = settled !== `${from}|${to}|${attempt}`;
+  const isFetching = settled !== `${from}|${to}|${attempt}|${tz}`;
   const rows = loaded ? buildRows(loaded, tz, from, to) : [];
   const hasUnverified = rows.some((row) => row.isUnverified);
   const columns = useMemo(() => columnsFor(reload), [reload]);
@@ -156,9 +156,12 @@ export function TableRoute() {
     link.href = url;
     link.download = `clockit-report-${from}-${to}.csv`;
     link.click();
-    // The file carries hourly rates, and an object URL is readable by anything holding it,
-    // so it lives exactly as long as the click that consumed it.
-    URL.revokeObjectURL(url);
+    // Released on the next task, not in this one: File API §8.4 makes a revoked URL a
+    // network error to anything dereferencing it afterwards, and nothing guarantees the
+    // download reads the blob before click() returns. This is hygiene, not secrecy — a
+    // blob: URL is keyed to this origin's blob store, so the only thing that could read it
+    // is same-origin script, which could just call reportToCsv itself.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   return (
@@ -190,9 +193,13 @@ export function TableRoute() {
           {rows.length > 0 && (
             <Button
               label="Export CSV"
-              isDisabled={isFetching}
+              // Also off after a failed refetch: the rows on screen are the ones from before
+              // the save that triggered it, so the file would be the pre-save one — the same
+              // stale download the disable-while-fetching guard exists to prevent, reached
+              // by the error path instead. Retry calls reload, which clears failedRange.
+              isDisabled={isFetching || hasFailed}
               tooltip={
-                isFetching
+                isFetching || hasFailed
                   ? 'Refreshing these numbers — the file would be out of date.'
                   : 'Download this range as a CSV.'
               }

@@ -26,8 +26,10 @@ export function cents(n: number): string {
 /**
  * The same amount for machine-read output: 1807 → "18.07", -1800 → "-18.00". No currency
  * symbol and no thousands separator — a CSV field carrying either stops being a number to
- * the spreadsheet that opens it. Exact for every integer cent: a double holds cents/100 to
- * well within half a cent, so toFixed(2) always names the cent that went in.
+ * the spreadsheet that opens it. Exact for every integer cent up to ~4.5e15 — a double
+ * holds cents/100 to well within half a cent there, so toFixed(2) names the cent that went
+ * in. Above that its spacing exceeds half a cent and the last digit can move: cents() has
+ * the same ceiling, and $45 trillion is not a payroll.
  */
 export function dollars(n: number): string {
   return (whole(n) / 100).toFixed(2);

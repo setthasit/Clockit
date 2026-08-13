@@ -12,6 +12,7 @@ import {dayKey, type DayKey} from './week';
 /** One rendered line. Day headers, member rows and the grand total share one column set,
  *  so every figure sits under the heading that names it. */
 export type Row = {
+  /** React list key and the Table's `idKey`. Nothing may join on its shape. */
   key: string;
   kind: 'day' | 'member' | 'total';
   /** Date label, member name, or the grand-total caption. */
@@ -23,6 +24,11 @@ export type Row = {
    *  state: a member row exists only because the server paid minutes for a closed entry.
    *  The cell renders it as missing data rather than as an empty, verified-looking shift. */
   times: string | null;
+  /** Member rows only — the closed shifts behind this row's minutes, in worked order; empty
+   *  on day and total rows. `times` is these same shifts as one cell, and the CSV gives each
+   *  end its own column: one join, so the two can never disagree and no reader has to
+   *  reconstruct the key they were bucketed under. */
+  shifts: EmployerEntry[];
   isUnverified: boolean;
   minutes: number;
   rateCents: number | null;
@@ -81,6 +87,7 @@ export function buildRows({days, shifts}: Report, tz: string, from: DayKey, to: 
       tip: {day: day.date, cents: day.tip_cents},
       note: day.rows.length === 0 ? 'Nobody worked this day, so this tip is unassigned.' : null,
       times: null,
+      shifts: [],
       isUnverified: false,
       minutes: day.total_minutes,
       rateCents: null,
@@ -108,6 +115,7 @@ export function buildRows({days, shifts}: Report, tz: string, from: DayKey, to: 
         tip: null,
         note: null,
         times: worked.map((e) => timeRange(e.clock_in_at, e.clock_out_at, tz)).join(', ') || null,
+        shifts: worked,
         isUnverified: worked.some((e) => !e.location_verified),
         minutes: row.minutes,
         rateCents: row.hourly_rate_cents,
@@ -131,6 +139,7 @@ export function buildRows({days, shifts}: Report, tz: string, from: DayKey, to: 
     tip: null,
     note: null,
     times: null,
+    shifts: [],
     isUnverified: false,
     minutes: grand.minutes,
     rateCents: null,
