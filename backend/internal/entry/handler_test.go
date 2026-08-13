@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/setthasit/clockit/backend/internal/config"
+	"github.com/setthasit/clockit/backend/internal/employer"
 	"github.com/setthasit/clockit/backend/internal/httpx"
 	"github.com/setthasit/clockit/backend/internal/user"
 )
@@ -175,3 +176,75 @@ func TestPingFixesValidatesAndOrdersTheBatch(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// getEmployerEntries drives the endpoint the way the router does, minus the
+// middleware: the caller is already resolved by the time a handler runs.
+func getEmployerEntries(t *testing.T, h *Handler, caller *user.User, employerID bson.ObjectID) *httptest.ResponseRecorder {
+	t.Helper()
+	e := echo.New()
+	e.HTTPErrorHandler = httpx.ErrorHandler
+	req := httptest.NewRequest(http.MethodGet, "/v1/employers/"+employerID.Hex()+"/entries", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(employerID.Hex())
+	c.Set("clockit.user", caller)
+	if err := h.EmployerList(c); err != nil {
+		e.HTTPErrorHandler(err, c)
+	}
+	return rec
+}
+
+// The employer view is the one place a shift is read by someone other than its
+// owner, so it is the one place a leaked coordinate would matter.
+func TestEmployerListJoinsMembersAndHidesCoordinates(t *testing.T) {
+	ctx := context.Background()
+	s, worker := testStore(t)
+	db := s.entries.Database()
+	worker.Name, worker.Email = "Dana Lee", "dana@example.com"
+	if _, err := db.Collection("users").InsertOne(ctx, worker); err != nil {
+		t.Fatal(err)
+	}
+
+	employers := employer.NewStore(db, s.env)
+	owner := bson.NewObjectID()
+	emp, err := employers.Create(ctx, owner, "Cafe", "Asia/Bangkok", employer.LatLng{Lat: vanLat, Lng: vanLng})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := msTime(time.Now().UTC().Add(-3 * time.Hour))
+	open, _, err := s.ClockIn(ctx, worker, &emp.ID, "c-1", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: in})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 90 minutes and 20 seconds: duration_minutes rounds to the nearest minute.
+	out := in.Add(90*time.Minute + 20*time.Second)
+	if _, err := s.ClockOut(ctx, worker, open, "c-2", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: out}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewHandler(s, employers, config.Config{})
+	rec := getEmployerEntries(t, h, &user.User{ID: owner}, emp.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"Dana Lee"`, `"dana@example.com"`, `"duration_minutes":90`, `"location_verified":true`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body = %s, want it to contain %s", body, want)
+		}
+	}
+	// The security assert: no coordinates, and no fix metadata either.
+	for _, leak := range []string{`"lat"`, `"lng"`, `"loc"`, `"accuracy"`, `"mocked"`} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("body = %s, leaked %q to the employer", body, leak)
+		}
+	}
+
+	// A stranger must not learn that the employer exists.
+	rec = getEmployerEntries(t, h, &user.User{ID: bson.NewObjectID()}, emp.ID)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s, want 404 for a non-owner", rec.Code, rec.Body)
+	}
+}

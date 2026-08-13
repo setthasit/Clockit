@@ -48,6 +48,9 @@ func RegisterRoutes(e *echo.Echo, h *Handler, userStore *user.Store, authMW echo
 	e.GET("/v1/entries", h.List, authMW, userMW)
 	e.PATCH("/v1/entries/:id", h.Assign, authMW, rateLimit, userMW)
 	e.POST("/v1/pings", h.Pings, authMW, rateLimit, userMW)
+	// Employer-scoped path, entry-owned data: this package already holds both
+	// the time_entries store and the employer store the ownership check needs.
+	e.GET("/v1/employers/:id/entries", h.EmployerList, authMW, userMW)
 }
 
 // clockPointView carries plaintext coordinates: this projection is only ever
@@ -356,16 +359,9 @@ func (h *Handler) speedAnomaly(ctx context.Context, u *user.User, e *Entry, fixe
 }
 
 func (h *Handler) List(c echo.Context) error {
-	from, err := timeParam(c, "from")
+	from, to, err := window(c)
 	if err != nil {
 		return err
-	}
-	to, err := timeParam(c, "to")
-	if err != nil {
-		return err
-	}
-	if from != nil && to != nil && to.Before(*from) {
-		return httpx.Invalid("from must not be after to")
 	}
 
 	ctx := c.Request().Context()
@@ -383,6 +379,84 @@ func (h *Handler) List(c echo.Context) error {
 		views = append(views, v)
 	}
 	return c.JSON(http.StatusOK, echo.Map{"entries": views})
+}
+
+// employerView is what an employer is entitled to see about a member's shift:
+// when it ran and how it was judged. No coordinates, and no accuracy or mocked
+// either — those are properties of the fix, and the employer gets verdicts, not
+// tracks (design §4.5, plan §5.5). Mocked fixes are rejected at capture, so
+// their absence here hides nothing that was accepted.
+type employerView struct {
+	ID         bson.ObjectID    `json:"id"`
+	User       employer.UserRef `json:"user"`
+	Status     string           `json:"status"`
+	ClockInAt  time.Time        `json:"clock_in_at"`
+	ClockOutAt *time.Time       `json:"clock_out_at"`
+	// DurationMinutes is display-only, rounded to the nearest minute; the payroll
+	// report (§6.2) does its own money-grade minutes math.
+	DurationMinutes  *int64   `json:"duration_minutes"`
+	LocationVerified bool     `json:"location_verified"`
+	Flags            []string `json:"flags"`
+}
+
+// EmployerList is the calendar and table feed: every shift booked to one
+// employer, newest first, joined with who worked it.
+func (h *Handler) EmployerList(c echo.Context) error {
+	employerID, err := bson.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		// A malformed id is answered like a foreign one, so the endpoint never
+		// confirms which ids exist.
+		return httpx.NotFound()
+	}
+	from, to, err := window(c)
+	if err != nil {
+		return err
+	}
+
+	ctx := c.Request().Context()
+	if _, err := h.employers.GetOwned(ctx, employerID, user.CurrentUser(c).ID); err != nil {
+		if errors.Is(err, employer.ErrNotFound) {
+			return httpx.NotFound()
+		}
+		return err
+	}
+	entries, err := h.store.ListByEmployer(ctx, employerID, from, to)
+	if err != nil {
+		return err
+	}
+	ids := make([]bson.ObjectID, 0, len(entries))
+	for i := range entries {
+		ids = append(ids, entries[i].UserID)
+	}
+	users, err := h.employers.UsersByID(ctx, ids)
+	if err != nil {
+		return err
+	}
+
+	views := make([]employerView, 0, len(entries))
+	for i := range entries {
+		views = append(views, newEmployerView(&entries[i], users[entries[i].UserID]))
+	}
+	return c.JSON(http.StatusOK, echo.Map{"entries": views})
+}
+
+func newEmployerView(e *Entry, u employer.UserRef) employerView {
+	v := employerView{
+		ID:               e.ID,
+		User:             u,
+		Status:           e.Status,
+		ClockInAt:        e.ClockIn.At,
+		LocationVerified: e.LocationVerified,
+		Flags:            e.Flags,
+	}
+	if v.Flags == nil {
+		v.Flags = []string{}
+	}
+	if e.ClockOut != nil {
+		minutes := int64(e.ClockOut.At.Sub(e.ClockIn.At).Round(time.Minute) / time.Minute)
+		v.ClockOutAt, v.DurationMinutes = &e.ClockOut.At, &minutes
+	}
+	return v
 }
 
 // Assign attaches an employer to a personal entry after the fact. It never
@@ -469,6 +543,22 @@ func (h *Handler) withinAnchor(ctx context.Context, u *user.User, e *Entry, anch
 		}
 	}
 	return true, nil
+}
+
+// window reads the optional [from, to) query bounds shared by both list views.
+func window(c echo.Context) (*time.Time, *time.Time, error) {
+	from, err := timeParam(c, "from")
+	if err != nil {
+		return nil, nil, err
+	}
+	to, err := timeParam(c, "to")
+	if err != nil {
+		return nil, nil, err
+	}
+	if from != nil && to != nil && to.Before(*from) {
+		return nil, nil, httpx.Invalid("from must not be after to")
+	}
+	return from, to, nil
 }
 
 // timeParam reads an optional RFC3339 range bound; absent means unbounded.

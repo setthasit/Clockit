@@ -75,7 +75,16 @@ func (s *Store) ByID(ctx context.Context, userID, entryID bson.ObjectID) (*Entry
 // directly and a year of shifts is a few hundred documents. Add a limit and a
 // cursor when one response gets large.
 func (s *Store) List(ctx context.Context, userID bson.ObjectID, from, to *time.Time) ([]Entry, error) {
-	filter := bson.M{"user_id": userID}
+	return s.list(ctx, bson.M{"user_id": userID}, from, to)
+}
+
+// ListByEmployer is the owner's view of a team's shifts, same window semantics
+// as List. Authorization is the caller's job: this filters on employer_id only.
+func (s *Store) ListByEmployer(ctx context.Context, employerID bson.ObjectID, from, to *time.Time) ([]Entry, error) {
+	return s.list(ctx, bson.M{"employer_id": employerID}, from, to)
+}
+
+func (s *Store) list(ctx context.Context, filter bson.M, from, to *time.Time) ([]Entry, error) {
 	window := bson.M{}
 	if from != nil {
 		window["$gte"] = msTime(*from)

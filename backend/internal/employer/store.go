@@ -155,11 +155,12 @@ func (s *Store) Update(ctx context.Context, employerID, ownerUserID bson.ObjectI
 	return err
 }
 
-// userDoc is the read-only slice of the users collection membership handling
-// needs.
-type userDoc struct {
-	ID   bson.ObjectID `bson:"_id"`
-	Name string        `bson:"name"`
+// UserRef is the read-only slice of the users collection that employer-owned
+// views join in: who a membership or a time entry belongs to, nothing more.
+type UserRef struct {
+	ID    bson.ObjectID `bson:"_id" json:"id"`
+	Name  string        `bson:"name" json:"name"`
+	Email string        `bson:"email" json:"email"`
 }
 
 // AddMember invites an address, reviving a previously removed membership rather
@@ -218,7 +219,13 @@ func (s *Store) ListMembers(ctx context.Context, e *Employer) ([]Member, error) 
 		return nil, err
 	}
 
-	names, err := s.namesByUserID(ctx, docs)
+	ids := make([]bson.ObjectID, 0, len(docs))
+	for i := range docs {
+		if docs[i].UserID != nil {
+			ids = append(ids, *docs[i].UserID)
+		}
+	}
+	users, err := s.UsersByID(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +233,7 @@ func (s *Store) ListMembers(ctx context.Context, e *Employer) ([]Member, error) 
 	for i := range docs {
 		name := ""
 		if docs[i].UserID != nil {
-			name = names[*docs[i].UserID]
+			name = users[*docs[i].UserID].Name
 		}
 		m, err := s.member(ctx, e, &docs[i], name)
 		if err != nil {
@@ -289,8 +296,8 @@ func (s *Store) member(ctx context.Context, e *Employer, m *Membership, name str
 	return out, nil
 }
 
-func (s *Store) userByEmail(ctx context.Context, email string) (*userDoc, error) {
-	var u userDoc
+func (s *Store) userByEmail(ctx context.Context, email string) (*UserRef, error) {
+	var u UserRef
 	err := s.users.FindOne(ctx, bson.M{"email": email}).Decode(&u)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil
@@ -301,14 +308,12 @@ func (s *Store) userByEmail(ctx context.Context, email string) (*userDoc, error)
 	return &u, nil
 }
 
-func (s *Store) namesByUserID(ctx context.Context, docs []Membership) (map[bson.ObjectID]string, error) {
-	ids := make([]bson.ObjectID, 0, len(docs))
-	for i := range docs {
-		if docs[i].UserID != nil {
-			ids = append(ids, *docs[i].UserID)
-		}
-	}
-	out := map[bson.ObjectID]string{}
+// UsersByID resolves a batch of user ids in one round trip. Missing ids are
+// simply absent from the map: a membership can point at a user document that a
+// caller is no longer entitled to see, and an empty name is a better answer
+// than a failed page.
+func (s *Store) UsersByID(ctx context.Context, ids []bson.ObjectID) (map[bson.ObjectID]UserRef, error) {
+	out := map[bson.ObjectID]UserRef{}
 	if len(ids) == 0 {
 		return out, nil
 	}
@@ -316,12 +321,12 @@ func (s *Store) namesByUserID(ctx context.Context, docs []Membership) (map[bson.
 	if err != nil {
 		return nil, err
 	}
-	var found []userDoc
+	var found []UserRef
 	if err := cur.All(ctx, &found); err != nil {
 		return nil, err
 	}
 	for _, u := range found {
-		out[u.ID] = u.Name
+		out[u.ID] = u
 	}
 	return out, nil
 }
