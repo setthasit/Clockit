@@ -18,6 +18,7 @@ import { useSessionStore } from "@/stores/session";
 
 export default function Clock() {
   const openEntry = useClockStore((s) => s.openEntry);
+  const lastClosed = useClockStore((s) => s.lastClosed);
   const pendingSince = useClockStore((s) => s.pendingSince);
   const hydrateFromServer = useClockStore((s) => s.hydrateFromServer);
   const memberships = useSessionStore((s) => s.me?.memberships);
@@ -27,7 +28,10 @@ export default function Clock() {
   const [now, setNow] = useState(() => Date.now());
 
   // Once per launch, not per focus: this tab is the navigator's first screen, so it mounts at
-  // launch and stays mounted. The rejection is swallowed on purpose — hydrateFromServer never
+  // launch — and remounts if the gate drops the Stack for a spinner (_layout.tsx:141-147, which
+  // onUnauthorized triggers mid-session by clearing `me`). The re-fire on recovery is the point:
+  // a session that just came back should refetch, and writeGen makes a late answer safe. The
+  // rejection is swallowed on purpose — hydrateFromServer never
   // clears state when it fails, so an offline launch keeps whatever was on screen instead of
   // raising a red box at someone who is simply in a dead zone. Re-hydrating on reconnect and on
   // foreground belongs to task 9.1's trigger list, alongside the outbox flush.
@@ -44,13 +48,18 @@ export default function Clock() {
   // trade stores/clock.ts deliberately chose over a store field, which would have re-rendered
   // every subscriber instead. Cheaper-than-a-render dedupe (comparing formatted strings inside the
   // interval) buys nothing measurable here and hides where the value comes from.
+  //
+  // Keyed on the timestamp the interval actually reads, not on `openEntry`: every hydrate parses a
+  // fresh object from JSON, so an identity dep would tear the interval down and rebuild it
+  // mid-shift once task 9.1 hydrates on NetInfo and AppState.
+  const startedAt = openEntry?.clock_in.at;
   useFocusEffect(
     useCallback(() => {
-      if (!openEntry) return;
+      if (!startedAt) return;
       setNow(Date.now());
       const id = setInterval(() => setNow(Date.now()), 1000);
       return () => clearInterval(id);
-    }, [openEntry]),
+    }, [startedAt]),
   );
 
   // useForegroundPermissions reads the OS once on mount and has no listener, so without this the
@@ -70,10 +79,18 @@ export default function Clock() {
   // Whole minutes: formatDuration rounds, and a stopwatch that reads "1m" 30 seconds in is wrong
   // in the direction that matters when the number is someone's pay. The first minute shows "0m",
   // which reads fine beside the "On shift since 9:02" line that gives it context.
-  const elapsed = openEntry
-    ? formatDuration(
-        Math.floor((now - Date.parse(openEntry.clock_in.at)) / 60000),
-      )
+  const elapsed = startedAt
+    ? formatDuration(Math.floor((now - Date.parse(startedAt)) / 60000))
+    : null;
+
+  // Whole shift, so formatDuration's rounding is right here: the ends are fixed, nothing is being
+  // watched climb. The optional chain narrows `lastClosed` too, so no non-null assertion.
+  const lastShift = lastClosed?.clock_out
+    ? `${formatClock(lastClosed.clock_in.at)} – ${formatClock(lastClosed.clock_out.at)} · ${formatDuration(
+        (Date.parse(lastClosed.clock_out.at) -
+          Date.parse(lastClosed.clock_in.at)) /
+          60000,
+      )}`
     : null;
 
   // A membership can be revoked while its shift is still running, so the id may resolve to nothing
@@ -84,6 +101,11 @@ export default function Clock() {
     : "Personal";
 
   const granted = permission?.granted === true;
+  // ponytail: the null guard keeps "Open settings" from flashing on every cold launch, and pays for
+  // it with a dead screen — disabled button, no message, no way out — if the OS read rejects and
+  // leaves `permission` null forever (same defect as _layout.tsx:177-181). Ceiling: web and dev
+  // builds without the native module, for users already past the explainer gate. Upgrade path is
+  // that comment's: read the status directly and treat a failure as UNDETERMINED.
   const blocked = permission != null && !granted;
 
   return (
@@ -101,18 +123,25 @@ export default function Clock() {
             <Text style={styles.elapsed}>{elapsed}</Text>
           </>
         ) : (
-          // ponytail: no last-shift summary. Nothing caches closed entries, and the only source is
-          // listEntries() over an unbounded window — the same call hydrateFromServer already makes
-          // and throws away, at ~2 decrypts per entry server-side. A second copy of the user's
-          // whole coordinate history on the wire, every launch, to render one line. Upgrade path:
-          // take the newest closed entry from a list the app already has — task 7.1's history cache,
-          // or clock.ts's hydrate once task 5.1's `status=open` filter stops it fetching everything.
-          <Text style={styles.employer}>Clocked out</Text>
+          // ponytail: the summary comes from the launch hydrate, so a cold offline launch shows
+          // none — absent exactly when the worker cannot check the server themselves. Same for the
+          // moment after a clock-out until the next hydrate, since setOpen does not write
+          // lastClosed. Ceiling: no persisted copy. Upgrade path is task 7.1's history cache if it
+          // does not replace this line outright.
+          <>
+            <Text style={styles.employer}>Clocked out</Text>
+            {lastShift != null && (
+              <Text style={styles.since}>Last shift {lastShift}</Text>
+            )}
+          </>
         )}
       </View>
 
       {pendingSince != null && (
-        <View style={styles.pill}>
+        // Worth announcing — it appears and disappears on its own. Android-only: RN exposes no iOS
+        // equivalent, and the alternative there (AccessibilityInfo.announceForAccessibility) would
+        // have to be fired from an effect that also has to decide when *not* to repeat itself.
+        <View accessibilityLiveRegion="polite" style={styles.pill}>
           <Text style={styles.pillLabel}>Waiting for connection</Text>
         </View>
       )}
@@ -173,8 +202,7 @@ const styles = StyleSheet.create({
   employer: { color: theme.surface, fontSize: 20, fontWeight: "700" },
   since: { color: theme.surface, fontSize: 15, opacity: 0.85 },
   elapsed: { color: theme.surface, fontSize: 34, fontWeight: "700" },
-  // Outlined rather than filled: "subtle" per the plan, and muted-on-white clears 4.5:1 where
-  // white-on-muted would not at this size.
+  // Outlined rather than filled: "subtle" per the plan.
   pill: {
     alignSelf: "center",
     borderWidth: 1,

@@ -44,13 +44,13 @@ const {useClockStore} = await import('@/stores/clock');
 
 const point = (at) => ({at, loc: {lat: 49.28, lng: -123.12}, accuracy: 8, mocked: false});
 
-const entry = (id, status, at) => ({
+const entry = (id, status, at, out = at) => ({
   id,
   client_id: `c-${id}`,
   employer_id: null,
   status,
   clock_in: point(at),
-  clock_out: status === 'closed' ? point(at) : null,
+  clock_out: status === 'closed' ? point(out) : null,
   location_verified: true,
   flags: [],
   created_at: at,
@@ -59,7 +59,7 @@ const entry = (id, status, at) => ({
 const clock = () => useClockStore.getState();
 
 function reset() {
-  useClockStore.setState({openEntry: null, pendingSince: null});
+  useClockStore.setState({openEntry: null, lastClosed: null, pendingSince: null});
   setListEntries(async () => []);
 }
 
@@ -98,6 +98,23 @@ test('two open entries resolve to the newest, compared as instants', async () =>
 
   await clock().hydrateFromServer();
   assert.equal(clock().openEntry, later);
+});
+
+test('the last shift is the newest by clock-out, compared as instants', async () => {
+  reset();
+  // A shift forgotten for six weeks and closed this afternoon is the last one *ended*, and that is
+  // what the clocked-out screen must show the moment the worker closes it — keying on clock_in.at
+  // would show yesterday's instead. The half-second gap is newestOpen's trap again: Go trims
+  // trailing zeros, so "…:00Z" > "…:00.5Z" as strings while being the earlier instant.
+  const forgotten = entry('forgotten', 'closed', '2026-01-02T23:30:00Z', '2026-02-13T17:00:00.5Z');
+  setListEntries(async () => [
+    entry('yesterday', 'closed', '2026-02-12T09:00:00Z', '2026-02-13T17:00:00Z'),
+    forgotten,
+    entry('running', 'open', '2026-02-13T18:00:00Z'),
+  ]);
+
+  await clock().hydrateFromServer();
+  assert.equal(clock().lastClosed, forgotten);
 });
 
 test('a failed hydrate rejects and leaves the open entry standing', async () => {

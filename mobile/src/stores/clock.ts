@@ -19,6 +19,22 @@ function newestOpen(entries: Entry[]): Entry | null {
   );
 }
 
+// Keyed on clock_out.at, not clock_in.at: "last shift" must be the shift the worker most recently
+// *ended*, because that is the one the screen shows the moment they clock out. Those differ exactly
+// when a forgotten entry is closed late — a month-old shift closed this afternoon is the last one
+// ended, while yesterday's is the last one started. `e.clock_out` is both the closed test and the
+// null guard: the server never writes clock_out on an open entry. Same instant comparison as
+// newestOpen, for the same trailing-zero reason.
+function newestClosed(entries: Entry[]): Entry | null {
+  return entries.reduce<Entry | null>(
+    (best, e) =>
+      e.clock_out && (!best?.clock_out || Date.parse(e.clock_out.at) > Date.parse(best.clock_out.at))
+        ? e
+        : best,
+    null,
+  );
+}
+
 // Bumped by every write to openEntry, local or remote. A hydrate takes a ticket before its request
 // and drops its answer if the ticket is stale — see hydrateFromServer.
 let writeGen = 0;
@@ -26,6 +42,10 @@ let writeGen = 0;
 type ClockState = {
   /** The running shift — server-confirmed, or optimistic while `pendingSince` is set. */
   openEntry: Entry | null;
+  /** The most recently ended shift, for the clocked-out summary. Not tick state: a closed entry's
+   * two timestamps never move, so nothing re-renders on its account. Server-set only — hydrate
+   * writes it, the optimistic setters do not. */
+  lastClosed: Entry | null;
   /** When the still-unacknowledged optimistic write was made (task 6.4), else null. Purely the
    * "waiting for connection" pill's flag (task 6.1) — it guards nothing. */
   pendingSince: string | null;
@@ -62,6 +82,7 @@ type ClockState = {
  */
 export const useClockStore = create<ClockState>((set) => ({
   openEntry: null,
+  lastClosed: null,
   pendingSince: null,
 
   setOpen: (openEntry) => {
@@ -106,6 +127,6 @@ export const useClockStore = create<ClockState>((set) => ({
     const mine = ++writeGen;
     const entries = await listEntries();
     if (mine !== writeGen) return;
-    set({openEntry: newestOpen(entries)});
+    set({openEntry: newestOpen(entries), lastClosed: newestClosed(entries)});
   },
 }));
