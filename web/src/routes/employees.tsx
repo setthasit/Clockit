@@ -1,16 +1,383 @@
+import {useEffect, useState} from 'react';
+import {AlertDialog} from '@astryxdesign/core/AlertDialog';
+import {Banner} from '@astryxdesign/core/Banner';
+import {Button} from '@astryxdesign/core/Button';
+import {Center} from '@astryxdesign/core/Center';
+import {Dialog, DialogHeader} from '@astryxdesign/core/Dialog';
+import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
+import {EmptyState} from '@astryxdesign/core/EmptyState';
+import {HStack, Layout, LayoutContent, LayoutFooter, VStack} from '@astryxdesign/core/Layout';
+import {NumberInput} from '@astryxdesign/core/NumberInput';
 import {Section} from '@astryxdesign/core/Section';
-import {VStack} from '@astryxdesign/core/Layout';
+import {Spinner} from '@astryxdesign/core/Spinner';
+import {StatusDot} from '@astryxdesign/core/StatusDot';
+import {pixel, proportional, Table, type TableColumn} from '@astryxdesign/core/Table';
 import {Heading, Text} from '@astryxdesign/core/Text';
+import {TextInput} from '@astryxdesign/core/TextInput';
+import {api, ApiError} from '../lib/api';
+import {useActiveEmployer} from '../lib/employer';
+import {cents, toCents} from '../lib/format';
+import type {Member, MemberStatus} from '../lib/types';
+
+const STATUS: Record<MemberStatus, {variant: 'accent' | 'success' | 'neutral'; label: string}> = {
+  invited: {variant: 'accent', label: 'Invited'},
+  active: {variant: 'success', label: 'Active'},
+  removed: {variant: 'neutral', label: 'Removed'},
+};
+
+// Mirrors the backend's 100_000_000-cent ceiling so the stepper stops where the API does.
+// The backend still validates: this only keeps the arrows from walking past it.
+const MAX_RATE_DOLLARS = 1_000_000;
+
+// Only for the invite paths: there the backend's own message ("email must be a valid
+// address", "already a member of this employer") describes what the user just typed.
+// The other codes it can return — "not found", "too many requests" — are wire-level
+// diagnostics, so those handlers below say what failed in their own words instead.
+function errorText(e: unknown, fallback: string): string {
+  return e instanceof ApiError ? e.message : fallback;
+}
 
 export function EmployeesRoute() {
-  return (
-    <Section>
-      <VStack gap={2}>
-        <Heading level={1}>Employees</Heading>
+  const employer = useActiveEmployer();
+
+  // Tagged with the employer it was fetched for rather than cleared when that changes:
+  // resetting inside the effect is a cascading render, and until it ran the table would
+  // show one frame of the previous employer's rates.
+  const [loaded, setLoaded] = useState<{employerId: string; members: Member[] | 'error'} | null>(
+    null,
+  );
+  const [attempt, setAttempt] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [edit, setEdit] = useState<{id: string; dollars: number | null} | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState<Member | null>(null);
+
+  // Anything but this employer's own list reads as loading.
+  const result = loaded?.employerId === employer.id ? loaded.members : null;
+  const members = result === 'error' ? null : result;
+  const loadFailed = result === 'error';
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api<{members: Member[]}>(`/v1/employers/${employer.id}/members`)
+      .then((data) => {
+        if (!cancelled) setLoaded({employerId: employer.id, members: data.members});
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded({employerId: employer.id, members: 'error'});
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [employer.id, attempt]);
+
+  const updateMembers = (update: (list: Member[]) => Member[]) =>
+    setLoaded((prev) =>
+      prev && prev.members !== 'error' ? {...prev, members: update(prev.members)} : prev,
+    );
+
+  const patchMember = (id: string, patch: Partial<Member>) =>
+    updateMembers((list) => list.map((m) => (m.id === id ? {...m, ...patch} : m)));
+
+  const commitRate = async (member: Member, dollars: number | null) => {
+    const value = dollars === null ? null : toCents(dollars);
+    // Enter commits, and the blur that follows commits again — but by then the optimistic
+    // update has landed on `member`, so the repeat is a no-op instead of a second PATCH.
+    if (value === null || value === member.hourly_rate_cents) return;
+
+    const previous = member.hourly_rate_cents;
+    setError(null);
+    patchMember(member.id, {hourly_rate_cents: value});
+
+    try {
+      await api<void>(`/v1/employers/${employer.id}/members/${member.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({hourly_rate_cents: value}),
+      });
+    } catch {
+      patchMember(member.id, {hourly_rate_cents: previous});
+      setError('Could not save that rate. Try again.');
+    }
+  };
+
+  const removeMember = async (member: Member) => {
+    setPendingRemoval(null);
+    setError(null);
+    patchMember(member.id, {status: 'removed'});
+
+    try {
+      await api<void>(`/v1/employers/${employer.id}/members/${member.id}`, {method: 'DELETE'});
+    } catch {
+      patchMember(member.id, {status: member.status});
+      // A 404 here does not mean "already gone": ownership failures answer the same way.
+      setError('Could not remove that employee. Try again.');
+    }
+  };
+
+  // Serves both the add dialog and the Removed section: POSTing an address that already
+  // has a removed membership revives that same membership, id included, so the response
+  // either replaces a row in place or appends a new one.
+  const invite = async (email: string) => {
+    const {member} = await api<{member: Member}>(`/v1/employers/${employer.id}/members`, {
+      method: 'POST',
+      body: JSON.stringify({email}),
+    });
+    updateMembers((list) =>
+      list.some((m) => m.id === member.id)
+        ? list.map((m) => (m.id === member.id ? member : m))
+        : [...list, member],
+    );
+  };
+
+  const reinvite = async (member: Member) => {
+    setError(null);
+    try {
+      await invite(member.email);
+    } catch (e) {
+      setError(errorText(e, 'Could not re-invite that employee. Try again.'));
+    }
+  };
+
+  const renderRate = (member: Member) => {
+    // A removed membership keeps its rate so past shifts still cost what they cost,
+    // but there is nothing left to schedule, so the cell stops being editable.
+    if (member.status === 'removed') {
+      return (
         <Text type="body" color="secondary">
-          Member list, invites and rates land here.
+          {member.hourly_rate_cents === null ? 'Not set' : cents(member.hourly_rate_cents)}
         </Text>
+      );
+    }
+
+    if (edit?.id === member.id) {
+      return (
+        <NumberInput
+          label="Hourly rate"
+          isLabelHidden
+          size="sm"
+          width={150}
+          min={0}
+          max={MAX_RATE_DOLLARS}
+          step={0.25}
+          placeholder="0.00"
+          hasAutoFocus
+          value={edit.dollars}
+          onChange={(dollars) => setEdit({id: member.id, dollars})}
+          onEnter={() => void commitRate(member, edit.dollars)}
+          onBlur={() => {
+            void commitRate(member, edit.dollars);
+            setEdit(null);
+          }}
+        />
+      );
+    }
+
+    return (
+      <Button
+        label={member.hourly_rate_cents === null ? 'Set rate' : cents(member.hourly_rate_cents)}
+        variant="ghost"
+        size="sm"
+        onClick={() =>
+          setEdit({
+            id: member.id,
+            // Dollars in the field, cents on the wire — see toCents() for the rounding.
+            dollars: member.hourly_rate_cents === null ? null : member.hourly_rate_cents / 100,
+          })
+        }
+      />
+    );
+  };
+
+  const columns: TableColumn<Member>[] = [
+    {
+      key: 'name',
+      header: 'Name',
+      width: proportional(1),
+      // Empty until the invitation is claimed: there is no user to take a name from yet.
+      renderCell: (member) => <Text type="body">{member.name || '—'}</Text>,
+    },
+    {key: 'email', header: 'Email', width: proportional(2)},
+    {
+      key: 'status',
+      header: 'Status',
+      width: pixel(130),
+      renderCell: (member) => (
+        <HStack gap={2} vAlign="center">
+          <StatusDot variant={STATUS[member.status].variant} label={STATUS[member.status].label} />
+          <Text type="body">{STATUS[member.status].label}</Text>
+        </HStack>
+      ),
+    },
+    {
+      key: 'hourly_rate_cents',
+      header: (
+        <VStack gap={0.5}>
+          <Text type="inherit">Hourly rate</Text>
+          <Text type="supporting" color="secondary">
+            Rates are never visible to employees.
+          </Text>
+        </VStack>
+      ),
+      width: pixel(220),
+      renderCell: renderRate,
+    },
+    {
+      key: 'actions',
+      header: '',
+      width: pixel(130),
+      align: 'end',
+      resizable: false,
+      renderCell: (member) => (
+        <DropdownMenu
+          button={{label: 'Actions', variant: 'ghost', size: 'sm'}}
+          alignment="end"
+          menuWidth={180}
+          items={[
+            member.status === 'removed'
+              ? {label: 'Re-invite', onClick: () => void reinvite(member)}
+              : {label: 'Remove', onClick: () => setPendingRemoval(member)},
+          ]}
+        />
+      ),
+    },
+  ];
+
+  const live = members?.filter((m) => m.status !== 'removed') ?? [];
+  const removed = members?.filter((m) => m.status === 'removed') ?? [];
+
+  return (
+    // padding={0}: AppShell already insets the content region, and the tables below are
+    // meant to run edge to edge inside it.
+    <Section padding={0} variant="transparent">
+      <VStack gap={5}>
+        <HStack gap={4} vAlign="center" hAlign="between">
+          <VStack gap={1}>
+            <Heading level={1}>Employees</Heading>
+            <Text type="body" color="secondary">
+              Invite your crew, set what each of them earns, and remove anyone who has left.
+            </Text>
+          </VStack>
+          <Button label="Add employee" variant="primary" onClick={() => setIsAdding(true)} />
+        </HStack>
+
+        {error && <Banner status="error" title={error} />}
+
+        {loadFailed && (
+          <Banner
+            status="error"
+            title="Could not load your employees"
+            description="Check your connection and try again."
+            endContent={
+              <Button
+                label="Retry"
+                variant="secondary"
+                size="sm"
+                onClick={() => setAttempt((n) => n + 1)}
+              />
+            }
+          />
+        )}
+
+        {!loadFailed && !members && (
+          <Center padding={10}>
+            <Spinner size="lg" />
+          </Center>
+        )}
+
+        {members?.length === 0 && (
+          <EmptyState
+            title="Add your first employee"
+            description="Invite someone by email. They can clock in as soon as they sign in on their phone."
+            actions={
+              <Button label="Add employee" variant="primary" onClick={() => setIsAdding(true)} />
+            }
+          />
+        )}
+
+        {live.length > 0 && <Table data={live} columns={columns} idKey="id" hasHover />}
+
+        {removed.length > 0 && (
+          <VStack gap={2}>
+            <Heading level={3}>Removed</Heading>
+            <Table data={removed} columns={columns} idKey="id" />
+          </VStack>
+        )}
       </VStack>
+
+      {isAdding && <AddEmployeeDialog onClose={() => setIsAdding(false)} onInvite={invite} />}
+
+      {pendingRemoval && (
+        <AlertDialog
+          isOpen
+          onOpenChange={() => setPendingRemoval(null)}
+          title="Remove this employee?"
+          description={`${pendingRemoval.name || pendingRemoval.email} stops being able to clock in. Past shifts stay on the record, and you can re-invite them from the Removed list.`}
+          actionLabel="Remove"
+          onAction={() => void removeMember(pendingRemoval)}
+        />
+      )}
     </Section>
+  );
+}
+
+function AddEmployeeDialog({
+  onClose,
+  onInvite,
+}: {
+  onClose: () => void;
+  onInvite: (email: string) => Promise<void>;
+}) {
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    const value = email.trim();
+    if (!value) {
+      setError('Enter an email address.');
+      return;
+    }
+    setError(null);
+
+    try {
+      await onInvite(value);
+      onClose();
+    } catch (e) {
+      // ALREADY_MEMBER and a malformed address both belong on the field that caused
+      // them, not on the page behind the dialog.
+      setError(errorText(e, 'Could not send that invitation. Try again.'));
+    }
+  };
+
+  return (
+    <Dialog isOpen onOpenChange={onClose} width={440} purpose="form">
+      <Layout
+        header={<DialogHeader title="Add employee" onOpenChange={onClose} />}
+        content={
+          <LayoutContent>
+            <TextInput
+              type="email"
+              label="Email"
+              description="They see the invitation the first time they sign in."
+              value={email}
+              onChange={setEmail}
+              placeholder="crew@example.com"
+              hasAutoFocus
+              isRequired
+              status={error ? {type: 'error', message: error} : undefined}
+            />
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter>
+            <HStack gap={2} hAlign="end">
+              <Button label="Cancel" variant="secondary" onClick={onClose} />
+              <Button label="Send invitation" variant="primary" clickAction={submit} />
+            </HStack>
+          </LayoutFooter>
+        }
+      />
+    </Dialog>
   );
 }

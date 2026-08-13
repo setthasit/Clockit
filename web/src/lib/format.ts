@@ -16,6 +16,17 @@ export function cents(n: number): string {
   return usd.format((Number.isFinite(n) ? Math.round(n) : 0) / 100);
 }
 
+/**
+ * Dollars typed into a rate field back to integer cents — 18.07 → 1807. Rounds rather
+ * than truncates: 18.07 * 100 is 1806.9999999999998 in binary floating point, so a
+ * truncating conversion would quietly shave a cent off the rate. Non-finite input
+ * returns null so the caller skips the request instead of sending NaN, which
+ * JSON.stringify would write as null and the backend would reject.
+ */
+export function toCents(dollars: number): number | null {
+  return Number.isFinite(dollars) ? Math.round(dollars * 100) : null;
+}
+
 /** Worked minutes as h:mm — 440 → "7:20". Negative or non-finite clamps to "0:00". */
 export function minutesToHM(minutes: number): string {
   const total = Number.isFinite(minutes) ? Math.max(0, Math.round(minutes)) : 0;

@@ -1,5 +1,5 @@
 import {expect, test} from 'vitest';
-import {cents, dayLabel, minutesToHM, timeRange} from './format';
+import {cents, dayLabel, minutesToHM, timeRange, toCents} from './format';
 
 test('cents renders integer cents as dollars', () => {
   expect(cents(1800)).toBe('$18.00');
@@ -8,6 +8,23 @@ test('cents renders integer cents as dollars', () => {
   expect(cents(-1800)).toBe('-$18.00');
   expect(cents(1800.6)).toBe('$18.01');
   expect(cents(Number.NaN)).toBe('$0.00');
+});
+
+test('toCents converts dollars without losing a penny to float error', () => {
+  expect(toCents(18)).toBe(1800);
+  expect(toCents(0)).toBe(0);
+  expect(toCents(0.05)).toBe(5);
+
+  // 18.07 * 100 is 1806.9999999999998 and 5.29 * 100 is 528.9999999999999: truncating
+  // either would underpay by a cent.
+  expect(toCents(18.07)).toBe(1807);
+  expect(toCents(5.29)).toBe(529);
+
+  expect(toCents(Number.NaN)).toBeNull();
+  expect(toCents(Number.POSITIVE_INFINITY)).toBeNull();
+
+  // What the user typed is what the table renders back.
+  expect(cents(toCents(18.07) ?? 0)).toBe('$18.07');
 });
 
 test('minutesToHM renders h:mm', () => {

@@ -8,3 +8,19 @@ export interface Employer {
   timezone: string;
   created_at: string;
 }
+
+export type MemberStatus = 'invited' | 'active' | 'removed';
+
+// A type alias, not an interface: Astryx's Table needs `T extends Record<string, unknown>`,
+// and only type aliases get TypeScript's implicit index signature.
+export type Member = {
+  id: string;
+  /** null until the invited address signs in and claims the membership. */
+  user_id: string | null;
+  email: string;
+  status: MemberStatus;
+  /** "" while the invitation is unclaimed — there is no user to take a name from yet. */
+  name: string;
+  /** Employer-only data: never render or log this outside employer-owned views. */
+  hourly_rate_cents: number | null;
+};
