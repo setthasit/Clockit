@@ -14,6 +14,11 @@ import { formatDistance } from "@/lib/format";
 import { theme } from "@/lib/theme";
 import { distanceM, inRange } from "@/location/fix";
 
+/**
+ * Two gaps task 6.4 has to close, both additive — nothing here needs rewriting for them:
+ * no `busy` prop, so rows stay tappable while a clock-in is in flight and a double tap fires
+ * `onSelect` twice; and no slot for the mapped error, which §6.4 wants shown inside the sheet.
+ */
 type Props = {
   visible: boolean;
   /** /v1/me returns active memberships only (api/me.ts), so there is nothing here to filter. */
@@ -36,9 +41,14 @@ type Props = {
  *
  * Plain RN `Modal` rather than `BottomSheet` from `@expo/ui`, which does exist in 57.0.10 (root
  * export, not the `@expo/ui/universal` specifier the plan remembered) but takes SwiftUI/Compose
- * children: RN views need an `RNHostView` wrapper, and none of the universal primitives accept
- * accessibilityRole/Label at all. Rows are the primary control here and their out-of-range state
- * has to reach a screen reader, so plan §7.1's "only if it fits without fighting it" says no.
+ * children: RN views need an `RNHostView` wrapper. iOS could still label them — the
+ * `accessibilityLabel` modifier maps onto the underlying SwiftUI Button — but Android's
+ * ModifierRegistry registers no contentDescription, so a row's "out of range" reason would be
+ * unreachable to TalkBack. Rows are the primary control here and that state has to be spoken on
+ * both platforms ClockIt ships. `@expo/ui/community/bottom-sheet` sidesteps the labelling (plain
+ * RN children, and no new dependency: reanimated and worklets are installed already) but hosts
+ * them through `RNHostView`, whose `matchContents` is fixed at mount — more machinery than six
+ * rows justify, which is what plan §7.1's "only if it fits without fighting it" is for.
  *
  * Rows out of range are styled down but stay tappable, and are deliberately never marked
  * accessibilityState.disabled: the radius this checks is a hardcoded copy of a server default that
@@ -62,8 +72,10 @@ export function EmployerSheet({
       visible={visible}
       transparent
       animationType="slide"
-      // Android's back button and gesture; iOS has no equivalent, which is why Cancel below is a
-      // real row rather than leaving dismissal to the backdrop.
+      // Android's back button and gesture. iOS fires this too, but only with allowSwipeDismissal,
+      // left at its default false: this Modal is transparent, so UIKit's dismiss gesture drags the
+      // whole overlay — full-screen backdrop included — instead of the card alone. Cancel below is
+      // therefore a real row, not a fallback for the backdrop.
       onRequestClose={onDismiss}
     >
       <Pressable
@@ -71,13 +83,22 @@ export function EmployerSheet({
         // thing announced, ahead of the choice the sheet exists to offer. Cancel is the way out.
         accessible={false}
         importantForAccessibility="no"
+        accessibilityElementsHidden
         onPress={onDismiss}
         style={styles.backdrop}
       />
 
       <View
+        // `transparent` presents over full screen, and UIKit leaves the screen behind in the
+        // accessibility tree; RN never sets this itself, so without it VoiceOver swipes past
+        // Cancel onto the Clock in button that opened the sheet.
+        accessibilityViewIsModal
         style={[
           styles.sheet,
+          // ponytail: assumes the dialog is edge-to-edge, which holds while the edge-to-edge flag
+          // is on (it forces navigationBarTranslucent). With it off Android self-insets and this
+          // adds a small second gap; app.config.ts sets neither way, so check on device and drop
+          // the inset if it double-counts.
           { paddingBottom: insets.bottom + theme.spacing.s },
         ]}
       >
