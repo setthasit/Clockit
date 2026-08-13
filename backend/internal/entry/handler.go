@@ -140,6 +140,13 @@ func (l *locBody) latLng() (employer.LatLng, error) {
 }
 
 func (h *Handler) ClockIn(c echo.Context) error {
+	var obs clockObs
+	err := h.clockIn(c, &obs)
+	obs.reportClockIn(c.Request().Context(), err)
+	return err
+}
+
+func (h *Handler) clockIn(c echo.Context, obs *clockObs) error {
 	var req clockRequest
 	if err := c.Bind(&req); err != nil {
 		return httpx.Invalid("malformed body")
@@ -152,6 +159,7 @@ func (h *Handler) ClockIn(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	obs.fix = &fix
 
 	ctx := c.Request().Context()
 	u := user.CurrentUser(c)
@@ -163,6 +171,7 @@ func (h *Handler) ClockIn(c echo.Context) error {
 		return err
 	}
 	if existing != nil {
+		obs.replay = true
 		return h.respond(c, http.StatusOK, u, existing)
 	}
 
@@ -174,6 +183,7 @@ func (h *Handler) ClockIn(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	obs.anchor = anchor
 	if appErr := ValidateFix(h.cfg, time.Now(), fix, anchor); appErr != nil {
 		return appErr
 	}
@@ -186,12 +196,20 @@ func (h *Handler) ClockIn(c echo.Context) error {
 		return err
 	}
 	if replayed {
+		obs.replay = true
 		return h.respond(c, http.StatusOK, u, e)
 	}
 	return h.respond(c, http.StatusCreated, u, e)
 }
 
 func (h *Handler) ClockOut(c echo.Context) error {
+	var obs clockObs
+	err := h.clockOut(c, &obs)
+	obs.report(c.Request().Context(), err)
+	return err
+}
+
+func (h *Handler) clockOut(c echo.Context, obs *clockObs) error {
 	var req clockRequest
 	if err := c.Bind(&req); err != nil {
 		return httpx.Invalid("malformed body")
@@ -204,6 +222,7 @@ func (h *Handler) ClockOut(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	obs.fix = &fix
 
 	ctx := c.Request().Context()
 	u := user.CurrentUser(c)
@@ -215,6 +234,7 @@ func (h *Handler) ClockOut(c echo.Context) error {
 		return err
 	}
 	if closed != nil {
+		obs.replay = true
 		return h.respond(c, http.StatusOK, u, closed)
 	}
 
@@ -223,7 +243,7 @@ func (h *Handler) ClockOut(c echo.Context) error {
 		return err
 	}
 	if open == nil {
-		return h.closedOrConflict(c, u, clientID)
+		return h.closedOrConflict(c, u, clientID, obs)
 	}
 	// Cheap ordering check before the crypto and the employer read.
 	if !fix.At.After(open.ClockIn.At) {
@@ -233,13 +253,14 @@ func (h *Handler) ClockOut(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	obs.anchor = anchor
 	if appErr := ValidateFix(h.cfg, time.Now(), fix, anchor); appErr != nil {
 		return appErr
 	}
 
 	e, err := h.store.ClockOut(ctx, u, open, clientID, fix)
 	if errors.Is(err, ErrEntryNotOpen) {
-		return h.closedOrConflict(c, u, clientID)
+		return h.closedOrConflict(c, u, clientID, obs)
 	}
 	if err != nil {
 		return err
@@ -253,12 +274,13 @@ func (h *Handler) ClockOut(c echo.Context) error {
 // this same close commits, so the shift may already be closed under this very
 // client_id — that is a replay and must answer with the entry. Only a genuinely
 // missing shift is a conflict.
-func (h *Handler) closedOrConflict(c echo.Context, u *user.User, clientID string) error {
+func (h *Handler) closedOrConflict(c echo.Context, u *user.User, clientID string, obs *clockObs) error {
 	closed, err := h.store.ByCloseClientID(c.Request().Context(), u.ID, clientID)
 	if err != nil {
 		return err
 	}
 	if closed != nil {
+		obs.replay = true
 		return h.respond(c, http.StatusOK, u, closed)
 	}
 	return httpx.NoOpenEntry()
