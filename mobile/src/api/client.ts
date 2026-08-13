@@ -27,7 +27,15 @@ export class ApiError extends Error {
 let getToken: (() => Promise<string>) | null = null;
 let onUnauthorized: (() => void) | null = null;
 
-/** Called once at app start (task 2.1) so this file stays free of stores/ and Auth0 imports. */
+/**
+ * Called once at app start (task 2.1) so this file stays free of stores/ and Auth0 imports.
+ *
+ * Contract for getToken: it owns the classification of Auth0 rejections, because only it
+ * can see the CredentialsManagerError code. It must throw `ApiError(0, 'NETWORK', ...)` for
+ * NO_NETWORK / API_ERROR rejections (an offline phone with an expired access token must stay
+ * signed in and stay retryable); any other rejection means the session is unrecoverable and
+ * signs the user out.
+ */
 export function setApiAuth(handlers: {
   getToken: () => Promise<string>;
   onUnauthorized: () => void;
@@ -38,9 +46,12 @@ export function setApiAuth(handlers: {
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (!BASE_URL) {
+    // Not NETWORK: EXPO_PUBLIC_* is inlined by Metro at build time, so a build missing it can
+    // never start working at runtime. A retryable status would park requests in the outbox
+    // forever; a 4xx puts the broken build in needsAttention where someone will see it.
     throw new ApiError(
-      0,
-      'NETWORK',
+      400,
+      'CONFIG',
       'EXPO_PUBLIC_API_URL is not set. Copy mobile/.env.example to mobile/.env and point it at your machine’s LAN IP.',
     );
   }
@@ -49,10 +60,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (getToken) {
     try {
       headers.set('Authorization', `Bearer ${await getToken()}`);
-    } catch {
+    } catch (e) {
       // Expired refresh token / no stored credentials rejects here with no HTTP 401
-      // ever sent, so this is the only path back to sign-in. The caught error is not
-      // logged: it can carry token and session detail.
+      // ever sent, so this is the only path back to sign-in. The caught error is never
+      // logged, in either branch: it can carry token and session detail.
+      if (e instanceof ApiError) throw e; // getToken already classified it (e.g. NO_NETWORK)
       onUnauthorized?.();
       throw new ApiError(401, 'UNAUTHENTICATED', 'Your session expired. Please sign in again.');
     }
@@ -86,6 +98,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     clearTimeout(timer);
   }
 
+  // RN's fetch resolves only once the body is buffered, so this .catch() is unreachable in
+  // practice; it stays to guarantee the invariant that api() only ever throws ApiError.
   const text = await res.text().catch(() => '');
 
   if (!res.ok) {
@@ -93,8 +107,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw toApiError(res.status, text);
   }
 
-  if (!text) return undefined as T;
-
+  // Deliberately diverges from web/src/lib/api.ts, which returns undefined on an empty body
+  // because its member PATCH/DELETE routes genuinely 204. No mobile-facing route does, so an
+  // empty 200 is truncation or a gateway page: fall through and let parseJson('') === undefined
+  // raise the malformed-response ApiError, rather than handing callers an undefined that
+  // destructures into a raw TypeError the outbox classifier cannot read.
   const data = parseJson(text);
   if (data === undefined) {
     throw new ApiError(res.status, 'UNKNOWN', 'The server returned a malformed response.');
