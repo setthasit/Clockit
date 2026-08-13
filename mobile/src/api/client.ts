@@ -34,7 +34,11 @@ let onUnauthorized: (() => void) | null = null;
  * can see the CredentialsManagerError code. It must throw `ApiError(0, 'NETWORK', ...)` for
  * NO_NETWORK / API_ERROR rejections (an offline phone with an expired access token must stay
  * signed in and stay retryable); any other rejection means the session is unrecoverable and
- * signs the user out.
+ * signs the user out. `ApiError` is the network signal and nothing else — the catch below
+ * rethrows every `ApiError` untouched, so rejecting with `ApiError(401, 'UNAUTHENTICATED')`
+ * strands the user in a dead session; reject with a plain Error to reach onUnauthorized().
+ * Whatever it throws is rethrown to the caller and its message is shown, so keep tokens and
+ * Auth0 session detail out of message/details — the same hazard the catch block cannot log away.
  */
 export function setApiAuth(handlers: {
   getToken: () => Promise<string>;
