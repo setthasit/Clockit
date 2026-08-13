@@ -9,6 +9,10 @@ import (
 const (
 	statusOpen   = "open"
 	statusClosed = "closed"
+
+	// flagSpeedAnomaly marks a shift whose breadcrumbs imply travel nobody made
+	// on foot. Advisory only: the employer reviews it, the API never rejects it.
+	flagSpeedAnomaly = "speed_anomaly"
 )
 
 // ClockPoint is one end of a shift. LocEnc holds {lat, lng} sealed with the

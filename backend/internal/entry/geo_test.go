@@ -175,3 +175,34 @@ func TestOutOfRangeCarriesDistanceDetails(t *testing.T) {
 		t.Fatalf("limit_m = %v, want 1000", got)
 	}
 }
+
+func TestSpeedAnomaly(t *testing.T) {
+	cfg := config.Config{SpeedAnomalyKMH: 200}
+	now := time.Now().UTC()
+	// north(km, d) is a fix km kilometres from the origin, d after it.
+	north := func(km float64, d time.Duration) Fix {
+		return Fix{Lat: vanLat + northOffset(km*1000), Lng: vanLng, At: now.Add(d)}
+	}
+	origin := Fix{Lat: vanLat, Lng: vanLng, At: now}
+
+	cases := []struct {
+		name       string
+		prev, curr Fix
+		want       bool
+	}{
+		{"walking pace", origin, north(0.05, time.Minute), false},
+		{"highway, under the limit", origin, north(100, time.Hour), false},
+		{"exactly at the limit is not over it", origin, north(200, time.Hour), false},
+		{"teleport", origin, north(300, time.Hour), true},
+		{"same instant is unmeasurable", origin, north(300, 0), false},
+		{"out-of-order fix is unmeasurable", origin, north(300, -time.Hour), false},
+		{"short hop at jet speed", origin, north(20, 2*time.Minute), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SpeedAnomaly(cfg, tc.prev, tc.curr); got != tc.want {
+				t.Fatalf("SpeedAnomaly = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,12 @@ import (
 // maxClientIDLen keeps a hostile client_id out of the unique index, whose keys
 // are size-limited; a UUIDv4 is 36 characters.
 const maxClientIDLen = 64
+
+// maxPingBatch bounds one outbox flush. The mobile client pings every 10
+// minutes, so 64 covers more than ten hours of backlog: a larger batch is a
+// client bug, and truncating it would hide that while silently dropping
+// evidence.
+const maxPingBatch = 64
 
 type Handler struct {
 	store *Store
@@ -40,6 +47,7 @@ func RegisterRoutes(e *echo.Echo, h *Handler, userStore *user.Store, authMW echo
 	e.POST("/v1/entries/clock-out", h.ClockOut, authMW, rateLimit, userMW)
 	e.GET("/v1/entries", h.List, authMW, userMW)
 	e.PATCH("/v1/entries/:id", h.Assign, authMW, rateLimit, userMW)
+	e.POST("/v1/pings", h.Pings, authMW, rateLimit, userMW)
 }
 
 // clockPointView carries plaintext coordinates: this projection is only ever
@@ -100,20 +108,32 @@ func (r *clockRequest) fix() (Fix, error) {
 	if r.At.IsZero() {
 		return Fix{}, httpx.Invalid("at is required")
 	}
-	l := r.Loc
-	if l == nil || l.Lat == nil || l.Lng == nil || l.Accuracy == nil {
-		return Fix{}, httpx.Invalid("loc requires lat, lng and accuracy")
+	loc, err := r.Loc.latLng()
+	if err != nil {
+		return Fix{}, err
 	}
-	if *l.Lat < -90 || *l.Lat > 90 {
-		return Fix{}, httpx.Invalid("lat must be within [-90, 90]")
+	if r.Loc.Accuracy == nil {
+		return Fix{}, httpx.Invalid("loc requires accuracy")
 	}
-	if *l.Lng < -180 || *l.Lng > 180 {
-		return Fix{}, httpx.Invalid("lng must be within [-180, 180]")
-	}
-	if *l.Accuracy < 0 {
+	if *r.Loc.Accuracy < 0 {
 		return Fix{}, httpx.Invalid("accuracy must not be negative")
 	}
-	return Fix{Lat: *l.Lat, Lng: *l.Lng, AccuracyM: *l.Accuracy, At: msTime(r.At), Mocked: r.Mocked}, nil
+	return Fix{Lat: loc.Lat, Lng: loc.Lng, AccuracyM: *r.Loc.Accuracy, At: msTime(r.At), Mocked: r.Mocked}, nil
+}
+
+// latLng checks presence and range. Accuracy is the caller's business: a clock
+// event is judged on it, a ping is not.
+func (l *locBody) latLng() (employer.LatLng, error) {
+	if l == nil || l.Lat == nil || l.Lng == nil {
+		return employer.LatLng{}, httpx.Invalid("loc requires lat and lng")
+	}
+	if *l.Lat < -90 || *l.Lat > 90 {
+		return employer.LatLng{}, httpx.Invalid("lat must be within [-90, 90]")
+	}
+	if *l.Lng < -180 || *l.Lng > 180 {
+		return employer.LatLng{}, httpx.Invalid("lng must be within [-180, 180]")
+	}
+	return employer.LatLng{Lat: *l.Lat, Lng: *l.Lng}, nil
 }
 
 func (h *Handler) ClockIn(c echo.Context) error {
@@ -230,6 +250,109 @@ func (h *Handler) ClockOut(c echo.Context) error {
 	}
 	// 200, not 201: closing a shift updates the entry created at clock-in.
 	return h.respond(c, http.StatusOK, u, e)
+}
+
+type pingBody struct {
+	At time.Time `json:"at"`
+	// Accuracy rides along in loc for symmetry with the clock endpoints; nothing
+	// server-side judges a breadcrumb on it, so it is read and dropped.
+	Loc *locBody `json:"loc"`
+}
+
+// Pings stores a flush of background breadcrumbs against the caller's running
+// shift. It never rejects on position — people move (design §4.5) — it only
+// flags travel that is physically impossible.
+func (h *Handler) Pings(c echo.Context) error {
+	var req struct {
+		Pings []pingBody `json:"pings"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return httpx.Invalid("malformed body")
+	}
+	fixes, err := pingFixes(req.Pings)
+	if err != nil {
+		return err
+	}
+
+	ctx := c.Request().Context()
+	u := user.CurrentUser(c)
+	open, err := h.store.OpenEntry(ctx, u.ID)
+	if err != nil {
+		return err
+	}
+	// No shift to attach to: the flush raced the clock-out, or the batch was
+	// empty. Both are answered as accepted-and-dropped, because an error here
+	// would leave the client's outbox retrying breadcrumbs forever.
+	if open == nil || len(fixes) == 0 {
+		return c.JSON(http.StatusOK, echo.Map{"accepted": 0})
+	}
+
+	anomaly, err := h.speedAnomaly(ctx, u, open, fixes)
+	if err != nil {
+		return err
+	}
+	n, err := h.store.AddPings(ctx, u, open.ID, fixes)
+	if err != nil {
+		return err
+	}
+	if anomaly {
+		if err := h.store.Flag(ctx, open, flagSpeedAnomaly); err != nil {
+			return err
+		}
+	}
+	return c.JSON(http.StatusOK, echo.Map{"accepted": n})
+}
+
+// pingFixes validates the batch and puts it in time order: the outbox flushes
+// whatever it queued, and a speed check on unordered fixes measures nothing.
+//
+// One bad ping fails the whole batch. A flush is one atomic unit for the
+// client, and partial acceptance would leave it guessing which breadcrumbs to
+// re-queue.
+func pingFixes(body []pingBody) ([]Fix, error) {
+	if len(body) > maxPingBatch {
+		return nil, httpx.Invalid("a batch carries at most 64 pings")
+	}
+	fixes := make([]Fix, 0, len(body))
+	for _, p := range body {
+		if p.At.IsZero() {
+			return nil, httpx.Invalid("each ping requires at")
+		}
+		loc, err := p.Loc.latLng()
+		if err != nil {
+			return nil, err
+		}
+		fixes = append(fixes, Fix{Lat: loc.Lat, Lng: loc.Lng, At: msTime(p.At)})
+	}
+	slices.SortStableFunc(fixes, func(a, b Fix) int { return a.At.Compare(b.At) })
+	return fixes, nil
+}
+
+// speedAnomaly walks the batch against the last point already on record — the
+// previous ping, or the clock-in when this is the first flush — so a jump
+// across the seam between stored and new breadcrumbs counts too.
+func (h *Handler) speedAnomaly(ctx context.Context, u *user.User, e *Entry, fixes []Fix) (bool, error) {
+	last, err := h.store.LastPing(ctx, e.ID)
+	if err != nil {
+		return false, err
+	}
+	locEnc, at := e.ClockIn.LocEnc, e.ClockIn.At
+	if last != nil {
+		locEnc, at = last.LocEnc, last.At
+	}
+	loc, err := h.store.openLoc(ctx, u, locEnc)
+	if err != nil {
+		return false, err
+	}
+
+	prev := Fix{Lat: loc.Lat, Lng: loc.Lng, At: at}
+	for _, f := range fixes {
+		if SpeedAnomaly(h.cfg, prev, f) {
+			return true, nil
+		}
+		prev = f
+	}
+	return false, nil
 }
 
 func (h *Handler) List(c echo.Context) error {

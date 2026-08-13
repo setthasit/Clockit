@@ -394,3 +394,69 @@ func TestByClientIDIsScopedToTheUser(t *testing.T) {
 		}
 	}
 }
+
+func TestAddPingsSealsTheTrack(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	e, _, err := s.ClockIn(ctx, u, nil, "c-1", testFix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last, err := s.LastPing(ctx, e.ID); err != nil || last != nil {
+		t.Fatalf("LastPing on a fresh entry = %+v, %v, want nil", last, err)
+	}
+	if n, err := s.AddPings(ctx, u, e.ID, nil); err != nil || n != 0 {
+		t.Fatalf("AddPings(nil) = %d, %v, want 0", n, err)
+	}
+
+	base := msTime(time.Now().UTC())
+	fixes := []Fix{
+		{Lat: 13.7563, Lng: 100.5018, At: base},
+		{Lat: 13.8888, Lng: 100.6666, At: base.Add(10 * time.Minute)},
+	}
+	n, err := s.AddPings(ctx, u, e.ID, fixes)
+	if err != nil || n != len(fixes) {
+		t.Fatalf("AddPings = %d, %v, want %d", n, err, len(fixes))
+	}
+
+	last, err := s.LastPing(ctx, e.ID)
+	if err != nil || last == nil {
+		t.Fatalf("LastPing = %+v, %v", last, err)
+	}
+	if !last.At.Equal(fixes[1].At) || last.EntryID != e.ID || last.UserID != u.ID {
+		t.Fatalf("last ping = %+v, want the newest fix on this entry", last)
+	}
+	if bytes.Contains(last.LocEnc, []byte("13.88")) {
+		t.Fatalf("ping location is not sealed: %q", last.LocEnc)
+	}
+	loc, err := s.openLoc(ctx, u, last.LocEnc)
+	if err != nil || loc.Lat != fixes[1].Lat || loc.Lng != fixes[1].Lng {
+		t.Fatalf("loc = %+v, %v", loc, err)
+	}
+	// created_at is the TTL anchor, not the ping time: a late flush keeps its
+	// full 90 days.
+	if last.CreatedAt.Before(base) {
+		t.Fatalf("created_at = %s, want the write time", last.CreatedAt)
+	}
+}
+
+func TestFlagIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	e, _, err := s.ClockIn(ctx, u, nil, "c-1", testFix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := s.Flag(ctx, e, flagSpeedAnomaly); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored, err := s.ByID(ctx, u.ID, e.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("ByID = %+v, %v", stored, err)
+	}
+	if len(stored.Flags) != 1 || stored.Flags[0] != flagSpeedAnomaly {
+		t.Fatalf("flags = %v, want [%s]", stored.Flags, flagSpeedAnomaly)
+	}
+}

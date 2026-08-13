@@ -2,16 +2,19 @@ package entry
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/setthasit/clockit/backend/internal/config"
 	"github.com/setthasit/clockit/backend/internal/httpx"
+	"github.com/setthasit/clockit/backend/internal/user"
 )
 
 // Assigning an open entry would re-point its clock-out at the employer's
@@ -54,3 +57,121 @@ func TestAssignRejectsOpenEntry(t *testing.T) {
 		t.Fatalf("stored = %+v, want the untouched open personal entry", stored)
 	}
 }
+
+// postPings drives the endpoint the way the router does, minus the middleware:
+// the user is already resolved by the time a handler runs.
+func postPings(t *testing.T, h *Handler, u *user.User, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	e := echo.New()
+	e.HTTPErrorHandler = httpx.ErrorHandler
+	req := httptest.NewRequest(http.MethodPost, "/v1/pings", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("clockit.user", u)
+	if err := h.Pings(c); err != nil {
+		e.HTTPErrorHandler(err, c)
+	}
+	return rec
+}
+
+func pingJSON(at time.Time, lat, lng float64) string {
+	return fmt.Sprintf(`{"at":%q,"loc":{"lat":%f,"lng":%f,"accuracy":12}}`, at.Format(time.RFC3339Nano), lat, lng)
+}
+
+// The shift can close between a ping being captured and the outbox flushing it.
+// Erroring would strand the batch in the client's queue forever, so the server
+// accepts the request and drops the breadcrumbs.
+func TestPingsWithoutOpenEntryAreDropped(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	h := NewHandler(s, nil, config.Config{SpeedAnomalyKMH: 200})
+
+	body := `{"pings":[` + pingJSON(time.Now().UTC(), vanLat, vanLng) + `]}`
+	rec := postPings(t, h, u, body)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"accepted":0`) {
+		t.Fatalf("status = %d, body = %s, want 200 accepted:0", rec.Code, rec.Body)
+	}
+	n, err := s.pings.CountDocuments(ctx, bson.M{"user_id": u.ID})
+	if err != nil || n != 0 {
+		t.Fatalf("stored %d pings, want 0 (%v)", n, err)
+	}
+}
+
+func TestPingsFlagImpossibleSpeed(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	h := NewHandler(s, nil, config.Config{SpeedAnomalyKMH: 200})
+
+	base := msTime(time.Now().UTC().Add(-time.Hour))
+	in := Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: base}
+	open, _, err := s.ClockIn(ctx, u, nil, "c-1", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A 5 km walk-and-bus over ten minutes: fast, not impossible.
+	body := `{"pings":[` + pingJSON(base.Add(10*time.Minute), vanLat+northOffset(5000), vanLng) + `]}`
+	if rec := postPings(t, h, u, body); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"accepted":1`) {
+		t.Fatalf("status = %d, body = %s, want 200 accepted:1", rec.Code, rec.Body)
+	}
+	stored, err := s.ByID(ctx, u.ID, open.ID)
+	if err != nil || len(stored.Flags) != 0 {
+		t.Fatalf("flags = %v, %v, want none yet", stored.Flags, err)
+	}
+
+	// Next flush lands 300 km away ten minutes later. The jump is across the
+	// seam between the stored ping and the new batch, which still counts.
+	body = `{"pings":[` +
+		pingJSON(base.Add(30*time.Minute), vanLat+northOffset(305_000), vanLng) + `,` +
+		pingJSON(base.Add(20*time.Minute), vanLat+northOffset(300_000), vanLng) + `]}`
+	if rec := postPings(t, h, u, body); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"accepted":2`) {
+		t.Fatalf("status = %d, body = %s, want 200 accepted:2", rec.Code, rec.Body)
+	}
+
+	stored, err = s.ByID(ctx, u.ID, open.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Flags) != 1 || stored.Flags[0] != flagSpeedAnomaly {
+		t.Fatalf("flags = %v, want [%s]", stored.Flags, flagSpeedAnomaly)
+	}
+	// Flagged, never rejected: the breadcrumbs are still evidence (design §4.5).
+	n, err := s.pings.CountDocuments(ctx, bson.M{"entry_id": open.ID})
+	if err != nil || n != 3 {
+		t.Fatalf("stored %d pings, want 3 (%v)", n, err)
+	}
+}
+
+func TestPingFixesValidatesAndOrdersTheBatch(t *testing.T) {
+	now := msTime(time.Now().UTC())
+	loc := &locBody{Lat: ptr(vanLat), Lng: ptr(vanLng)}
+
+	oversized := make([]pingBody, maxPingBatch+1)
+	for i := range oversized {
+		oversized[i] = pingBody{At: now, Loc: loc}
+	}
+	if _, err := pingFixes(oversized); err == nil {
+		t.Fatalf("pingFixes(%d pings) = nil error, want the batch cap to reject it", len(oversized))
+	}
+	if _, err := pingFixes([]pingBody{{Loc: loc}}); err == nil {
+		t.Fatal("a ping without at was accepted")
+	}
+	if _, err := pingFixes([]pingBody{{At: now}}); err == nil {
+		t.Fatal("a ping without loc was accepted")
+	}
+
+	// The outbox flushes whatever it queued: order is the server's job.
+	out, err := pingFixes([]pingBody{
+		{At: now.Add(time.Minute), Loc: loc},
+		{At: now, Loc: loc},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out[0].At.Equal(now) || !out[1].At.Equal(now.Add(time.Minute)) {
+		t.Fatalf("fixes = %v, want ascending by at", out)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

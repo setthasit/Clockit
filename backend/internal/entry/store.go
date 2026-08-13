@@ -31,11 +31,16 @@ func msTime(t time.Time) time.Time { return t.UTC().Truncate(time.Millisecond) }
 
 type Store struct {
 	entries *mongo.Collection
+	pings   *mongo.Collection
 	env     *crypto.Envelope
 }
 
 func NewStore(db *mongo.Database, env *crypto.Envelope) *Store {
-	return &Store{entries: db.Collection("time_entries"), env: env}
+	return &Store{
+		entries: db.Collection("time_entries"),
+		pings:   db.Collection("location_pings"),
+		env:     env,
+	}
 }
 
 // ByClientID is the idempotency lookup: a replayed clock-in must return the
@@ -207,6 +212,72 @@ func (s *Store) ClockOut(ctx context.Context, u *user.User, e *Entry, clientID s
 	closed.Status = statusClosed
 	closed.CloseClientID = clientID
 	return &closed, nil
+}
+
+// LastPing returns the newest breadcrumb already on an entry, or nil when this
+// batch is the first. It is the left-hand side of the speed check, so it must be
+// read before the batch is inserted.
+func (s *Store) LastPing(ctx context.Context, entryID bson.ObjectID) (*LocationPing, error) {
+	var p LocationPing
+	err := s.pings.FindOne(ctx,
+		bson.M{"entry_id": entryID},
+		options.FindOne().SetSort(bson.D{{Key: "at", Value: -1}})).Decode(&p)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// AddPings seals a batch of breadcrumbs under the user's DEK — one unwrap for
+// the whole batch — and writes them in a single round trip. created_at is the
+// TTL anchor, so it is the write time rather than the ping time: a batch flushed
+// late still gets its full retention.
+func (s *Store) AddPings(ctx context.Context, u *user.User, entryID bson.ObjectID, fixes []Fix) (int, error) {
+	if len(fixes) == 0 {
+		return 0, nil
+	}
+	dek, err := s.env.UnwrapDEK(ctx, u.ID.Hex(), u.DEKWrapped)
+	if err != nil {
+		return 0, err
+	}
+	now := msTime(time.Now())
+	docs := make([]any, 0, len(fixes))
+	for _, f := range fixes {
+		locEnc, err := crypto.SealJSON(dek, employer.LatLng{Lat: f.Lat, Lng: f.Lng})
+		if err != nil {
+			return 0, err
+		}
+		docs = append(docs, LocationPing{
+			ID:        bson.NewObjectID(),
+			EntryID:   entryID,
+			UserID:    u.ID,
+			At:        msTime(f.At),
+			LocEnc:    locEnc,
+			CreatedAt: now,
+		})
+	}
+
+	res, err := s.pings.InsertMany(ctx, docs)
+	if err != nil {
+		return 0, err
+	}
+	return len(res.InsertedIDs), nil
+}
+
+// Flag records an advisory verdict on an entry. $addToSet makes it idempotent,
+// so a shift that keeps tripping the same rule carries the flag once.
+//
+// ponytail: no transaction with the ping insert — a flag is evidence about
+// pings that are already stored, and losing it in a crash costs nothing a later
+// batch cannot re-raise.
+func (s *Store) Flag(ctx context.Context, e *Entry, flag string) error {
+	_, err := s.entries.UpdateOne(ctx,
+		bson.M{"_id": e.ID, "user_id": e.UserID},
+		bson.M{"$addToSet": bson.M{"flags": flag}})
+	return err
 }
 
 func (s *Store) sealLoc(ctx context.Context, u *user.User, loc employer.LatLng) ([]byte, error) {

@@ -49,6 +49,21 @@ func ValidateFix(cfg config.Config, now time.Time, f Fix, anchor *employer.LatLn
 	return nil
 }
 
+// SpeedAnomaly reports an impossible ground speed between two consecutive
+// fixes. Pings are never rejected for where they are — people move (design
+// §4.5) — so this only decides whether the entry gets flagged.
+//
+// A non-positive interval is unmeasurable rather than suspicious: the outbox
+// can flush duplicate or same-millisecond fixes, and those are not evidence.
+func SpeedAnomaly(cfg config.Config, prev, curr Fix) bool {
+	hours := curr.At.Sub(prev.At).Hours()
+	if hours <= 0 || !finite(prev.Lat, prev.Lng, curr.Lat, curr.Lng) {
+		return false
+	}
+	kmh := haversineM(prev.Lat, prev.Lng, curr.Lat, curr.Lng) / 1000 / hours
+	return kmh > float64(cfg.SpeedAnomalyKMH)
+}
+
 // WithinAnchor is the distance rule on its own, for assign-employer: it
 // re-measures a stored fix that was already judged for mock, accuracy and skew
 // at capture time, so only position is still in question.
