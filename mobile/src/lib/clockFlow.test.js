@@ -66,16 +66,24 @@ registerHooks({
           export const alerts = [];
           let choice = 'Cancel';
           export const Platform = {OS: 'ios'};
+          export const AppState = {currentState: 'active'};
           export function setPlatform(os) { Platform.OS = os; }
+          export function setAppState(s) { AppState.currentState = s; }
           export function setAlertChoice(text) { choice = text; }
           export function resetAlerts() {
             alerts.length = 0;
             choice = 'Cancel';
             Platform.OS = 'ios';
+            AppState.currentState = 'active';
           }
           export const Alert = {
             alert(title, message, buttons, options) {
               if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
+              // A paused Android host stashes the fragment on a FragmentManagerHelper that is
+              // minted per access, so onHostResume looks for it on a different instance and finds
+              // nothing: the dialog is never shown and no callback ever fires. Modelled as a drop
+              // for the same reason the web no-op is — this is the shape that strands the promise.
+              if (Platform.OS === 'android' && AppState.currentState !== 'active') return;
               alerts.push({title, message});
               if (!buttons) return;
               const b = buttons.find((x) => x.text === choice);
@@ -119,7 +127,7 @@ registerHooks({
 });
 
 const {resetUUID} = await import(CRYPTO_STUB);
-const {alerts, resetAlerts, setAlertChoice, setPlatform} = await import(RN_STUB);
+const {alerts, resetAlerts, setAlertChoice, setAppState, setPlatform} = await import(RN_STUB);
 const {setNext} = await import(LOCATION_STUB);
 const {useClockStore} = await import('@/stores/clock');
 const {useOutboxStore} = await import('@/stores/outbox');
@@ -287,11 +295,42 @@ test('a platform with no dialog settles the tap instead of killing the button', 
   ]);
 
   assert.notEqual(result, 'STRANDED', 'the confirm never settled — the clock button is dead for the session');
-  assert.equal(alerts.length, 0, 'a dialog that shows nothing was counted as having been shown');
   // The server owns the accuracy verdict, so a question we could not put to the worker must not
   // be answered "no" on their behalf — that would refuse the clock-in outright.
   assert.equal(result.done, true);
   assert.equal(clockRequests().length, 1);
+});
+
+// Same harm on a platform that does have a dialog: a screen-off or app-switch during getFix()'s
+// 15 s window puts the host in onHostPause, and a confirm raised from there is stashed on a helper
+// that is minted per access — onHostResume reads a different one, finds no pending fragment, and
+// the dialog is never shown. No button, no onDismiss, nothing to settle the promise.
+test('a paused android host settles the tap instead of stranding on a stashed dialog', async () => {
+  reset();
+  setPlatform('android');
+  setAppState('background');
+  setFix({accuracy: 101});
+
+  const result = await Promise.race([
+    clockInNow('e1', MEMBERSHIPS),
+    new Promise((r) => setTimeout(() => r('STRANDED'), 100)),
+  ]);
+
+  assert.notEqual(result, 'STRANDED', 'the confirm never settled — the clock button is dead for the session');
+  assert.equal(result.done, true);
+  assert.equal(clockRequests().length, 1);
+});
+
+// The other half: a resumed android host must still get the real question, or the clause above has
+// quietly disabled the confirm on the platform it was written for.
+test('a resumed android host still asks, and cancel still sends nothing', async () => {
+  reset();
+  setPlatform('android');
+  setFix({accuracy: 101});
+
+  assert.deepEqual(await clockInNow('e1', MEMBERSHIPS), {done: false, message: null});
+  assert.equal(alerts.length, 1, 'the confirm was skipped on a foregrounded android host');
+  assert.equal(clockRequests().length, 0, 'a cancelled confirm still sent the request');
 });
 
 test('a mocked fix on a platform with no dialog says so inline rather than dying silently', async () => {

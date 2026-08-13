@@ -1,5 +1,5 @@
 import * as Crypto from 'expo-crypto';
-import {Alert, Platform} from 'react-native';
+import {Alert, AppState, Platform} from 'react-native';
 
 import {ApiError} from '@/api/client';
 import {
@@ -44,10 +44,13 @@ const NOT_ON_SHIFT: ClockResult = {done: false, message: "You're not on shift."}
 
 // Alert.alert is implemented for exactly two platforms: RN's Alert.js branches on ios/android and
 // returns having touched nothing for anything else, and react-native-web replaces the module with
-// a literal no-op (`class Alert { static alert() {} }`). Everywhere else the dialog is not merely
-// ugly, it never speaks — so anything waiting on it waits forever. Called rather than hoisted to a
-// module constant so both sides of it are reachable from a test.
-const canAlert = () => Platform.OS === 'ios' || Platform.OS === 'android';
+// a literal no-op (`class Alert { static alert() {} }`). Android adds a second way to say nothing:
+// while the host is paused the dialog is stashed rather than shown, and the stash is never replayed
+// (confirmWeakGps below has the mechanism). In all of those the dialog is not merely ugly, it never
+// speaks — so anything waiting on it waits forever. Called rather than hoisted to a module constant
+// because AppState.currentState is a per-tap reading, and so both sides are reachable from a test.
+const canAlert = () =>
+  Platform.OS === 'ios' || (Platform.OS === 'android' && AppState.currentState === 'active');
 
 /** For anything that escapes the contracts below — api() promises only ApiError, getFix() only
  * LocationError, so this is a bug in our own code, shown rather than thrown because a tap handler
@@ -172,15 +175,32 @@ function localEntry(clientId: string, employerId: string | null, fix: Fix): Entr
  * the clock button spinning for the life of the process, recoverable only by a reload — which is
  * the exact harm the confirm was added to prevent.
  *
- * ponytail: one strand survives. On Android with no attached Activity, showAlert invokes only the
- * error callback (DialogModule.kt:123) and Alert.js:137 maps that to console.warn, so neither a
- * button nor onDismiss ever fires. Reachable when the up-to-15 s getFix() spans the app being
- * backgrounded hard enough to detach the Activity — merely leaving the foreground does not do it,
- * that path stashes the dialog and shows it on resume (DialogModule.kt:60-68). Ceiling: the button
- * is dead until relaunch inside that window. The upgrade path is deliberately *not* a timeout,
- * which would auto-answer "try anyway" for a worker who left the dialog up while walking outside
- * for a better fix — trading a rare dead button for a silent clock-in at a location they were
- * still deciding about. Settle it from the screen instead: resolve false on an AppState change.
+ * That is what the AppState clause in canAlert() is for. Android's stash-and-replay for a dialog
+ * raised while the host is paused does not work: showNewAlert parks the fragment on the
+ * FragmentManagerHelper *instance* (DialogModule.kt:62-69), but `fragmentManagerHelper` is a getter
+ * with no backing field that mints a fresh helper on every access (:158-172) — so onHostResume
+ * (:109-118) calls showPendingAlert on a different object and returns at its null check (:37). The
+ * fragment is never shown, so AlertFragment forwards neither onClick nor onDismiss
+ * (AlertFragment.kt:47-53), actionCallback is never invoked and the promise never settles.
+ * Reaching it is ordinary, not exotic: onHostPause is any screen-off or app-switch (:102-105), and
+ * currentActivity is cleared only on destroy (ReactContext.java:328-330), so a merely-paused host
+ * takes the stash branch rather than the "not attached to an Activity" error at :123. The window is
+ * getFix()'s up-to-15 s, and this dialog only fires above MAX_ACCURACY_M — indoors or between tall
+ * buildings, exactly where the read is slow and the phone goes into a pocket.
+ *
+ * AppState is the right reading because it is driven by the same LifecycleEventListener callbacks
+ * that flip isInForeground: AppStateModule.kt:41-47 sets 'active'/'background' from
+ * onHostResume/onHostPause, the two the dialog itself branches on.
+ *
+ * ponytail: two residuals survive, both milliseconds wide where the one removed was 15 s. A
+ * configuration change can leave fragmentManager.isStateSaved true while AppState still reads
+ * 'active' (:62), and a pause can land between this read and the native call. Ceiling: inside
+ * either, the button is dead until relaunch. The upgrade path is not a timeout, which would
+ * auto-answer "try anyway" for a worker who left the dialog up while walking outside for a better
+ * fix; it is settling from the side that knows — an alert whose callback is guaranteed to fire
+ * once. It is explicitly *not* this comment's earlier suggestion of resolving false on an AppState
+ * change: on the far commoner path where the dialog did show, that settles a question still on
+ * screen, and the worker's later tap on it would then do nothing.
  */
 function confirmWeakGps(accuracy: number): Promise<boolean> {
   // Answering `true` where we cannot ask, not `false`: the server owns the accuracy verdict either
