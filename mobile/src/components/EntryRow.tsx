@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   Animated,
+  Pressable,
   StyleSheet,
   Text,
   View,
@@ -20,19 +21,27 @@ type Props = {
   employerName: string | null;
   /** Outbox records the screen joined to this entry — usually empty. */
   attention: Attention[];
+  /** Omitted ⇒ the row is a record, not a control. The screen decides: an entry the server has
+   * never seen has `id: ''` (clockFlow.localEntry), and /entry/[id] has nothing to open for it. */
+  onPress?: () => void;
 };
 
 const PULSE_MS = 900;
 
 /**
- * One shift. Not pressable and carrying no id: task 7.2 owns navigation to /entry/[id] and must
- * check for an empty id before routing — an offline entry has `id: ''` on purpose (clockFlow.ts).
+ * One shift.
  *
  * One accessibility node with a composed label, like the clock screen's card: chip, times,
  * duration, flag and warning are five fragments that describe one thing, and a screen reader
- * walking them as five stops would read as five unrelated shifts.
+ * walking them as five stops would read as five unrelated shifts. The affordance goes in that
+ * label rather than in an accessibilityHint — a hint is suppressible on both platforms, and "what
+ * happens if I press this" is the one part of a row a screen-reader user cannot infer from the
+ * rest of it.
+ *
+ * Always a Pressable, even when inert: swapping the root element on a prop would change which
+ * native view the row is, and role and label already carry the difference truthfully.
  */
-export function EntryRow({ entry, employerName, attention }: Props) {
+export function EntryRow({ entry, employerName, attention, onPress }: Props) {
   const start = formatClock(entry.clock_in.at);
   // `clock_out`, not `status`: the server never writes one on an open entry, and this narrows.
   const end = entry.clock_out ? formatClock(entry.clock_out.at) : null;
@@ -52,12 +61,19 @@ export function EntryRow({ entry, employerName, attention }: Props) {
     duration,
     backdated ? "backdated, recorded offline and synced late" : null,
     ...attention.map((a) => `not synced: ${a.message}`),
+    onPress ? "opens shift details" : null,
   ]
     .filter((part): part is string => part != null)
     .join(", ");
 
   return (
-    <View accessible accessibilityLabel={label} style={styles.row}>
+    <Pressable
+      accessible
+      accessibilityLabel={label}
+      accessibilityRole={onPress ? "button" : undefined}
+      onPress={onPress}
+      style={({ pressed }) => [styles.row, pressed && onPress && styles.pressed]}
+    >
       <View style={styles.line}>
         <View
           style={[
@@ -96,7 +112,7 @@ export function EntryRow({ entry, employerName, attention }: Props) {
           ⚠ {a.message}
         </Text>
       ))}
-    </View>
+    </Pressable>
   );
 }
 
@@ -174,6 +190,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.l,
     gap: theme.spacing.s,
   },
+  pressed: { opacity: 0.6 },
   line: {
     flexDirection: "row",
     alignItems: "center",

@@ -1,4 +1,4 @@
-import { useFocusEffect } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -201,6 +201,18 @@ export default function History() {
           entry={item.entry}
           employerName={employerName(item.entry.employer_id)}
           attention={item.attention}
+          // An entry the server has never seen has `id: ''` (clockFlow.localEntry) — the falsy id
+          // is a dead route by design, so the row stays a record and simply does not press. It is
+          // also the one row whose detail would be a lie: nothing on it has been ruled on yet.
+          onPress={
+            item.entry.id
+              ? () =>
+                  router.push({
+                    pathname: "/entry/[id]",
+                    params: { id: item.entry.id },
+                  })
+              : undefined
+          }
         />
       )}
       renderSectionHeader={({ section }) => (
