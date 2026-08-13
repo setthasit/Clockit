@@ -35,8 +35,12 @@ export function SignInRoute() {
         {/* A tenant misconfiguration (missing client grant, wrong audience, no
             offline_access) comes back as ?error= on the redirect, which the provider
             turns into this error instead of a session — so the click looks like it did
-            nothing. error.message is Auth0's error_description: developer-facing text
-            about the tenant, carrying no token, session id or PII. */}
+            nothing. error.message is Auth0's error_description (or a fixed SDK message
+            like "Invalid state"): developer-facing text about the tenant, carrying no
+            token, session id or PII.
+            ponytail: error_description is verbatim attacker-controllable text in an
+            official-looking banner (text injection, not XSS — React escapes it), only
+            reachable in a tab holding an abandoned login transaction. Accepted. */}
         {error && <Banner status="error" title="Sign-in failed" description={error.message} />}
         <Button
           label="Sign in"
