@@ -32,10 +32,30 @@ function credentialsManager() {
 
 // Refreshing needs a refresh token, so task 2.2's authorize() must request `offline_access`;
 // without it every expired access token surfaces here as NO_REFRESH_TOKEN and signs the user out.
+// It must equally pass `audience: EXPO_PUBLIC_AUTH0_AUDIENCE`: backend/internal/auth/jwt.go:42
+// verifies with jwt.WithAudience(cfg.Auth0Audience), and with no audience requested Auth0 issues an
+// opaque token instead of an RS256 JWT — every request then 401s and onUnauthorized fires in a loop.
 const RETRYABLE: ReadonlySet<string> = new Set([
   CredentialsManagerErrorCodes.NO_NETWORK,
   CredentialsManagerErrorCodes.API_ERROR,
 ]);
+
+// An offline iOS renew never reaches the set above. Auth0.swift 2.24.1 has no `noNetwork` case, so
+// it fails as CredentialsManagerError(.renewFailed, cause: AuthenticationError)
+// (CredentialsManager.swift:909) and NativeBridge.swift:752 forwards the *cause's* code rather than
+// "RENEW_FAILED". A failure with no parseable API response is built by Auth0APIError.init(cause:),
+// which sets code = "a0.sdk.internal_error.plain" (Auth0Error.swift:3-5, alongside .unknown and
+// .empty); a rate-limited renew keeps its raw "too_many_requests". ERROR_CODE_MAP knows no a0.* or
+// 429 key, so both collapse to UNKNOWN_ERROR — which would sign out an offline user and let the
+// task 5.2 outbox discard their queued clock-in. Android already maps these to NO_NETWORK/API_ERROR
+// (SecureCredentialsManager), and Auth0APIError.isRetryable likewise counts network failures and
+// 429 as retryable, so matching on the raw code just restores that split on iOS. `code` survives
+// the mapping because CredentialsManagerError extends AuthError, which assigns it verbatim.
+// Auth0 5xx needs no entry here: with a JSON body it arrives as `server_error` (already API_ERROR),
+// without one as a0.sdk.internal_error.*.
+function isRetryableIosCode(code: string): boolean {
+  return code.startsWith('a0.sdk.internal_error.') || code === 'too_many_requests';
+}
 
 /**
  * The single token source for api(). Works outside React (the task 9.1 outbox flushes from
@@ -49,10 +69,17 @@ const RETRYABLE: ReadonlySet<string> = new Set([
 export async function getAccessToken(): Promise<string> {
   let accessToken: string;
   try {
-    ({accessToken} = await credentialsManager().getCredentials());
+    // minTtl (2nd arg of getCredentials(scope?, minTtl?, parameters?, forceRefresh?)) defaults to
+    // 0, which returns a token with one second of life as valid; expiring in flight would 401 and
+    // sign out a session that only needed renewing. 60s is far below any access-token lifetime, so
+    // LARGE_MIN_TTL is unreachable.
+    ({accessToken} = await credentialsManager().getCredentials(undefined, 60));
   } catch (e) {
     // `e` is never logged or interpolated into a message: it can carry token and session detail.
-    if (e instanceof CredentialsManagerError && RETRYABLE.has(e.type)) {
+    if (
+      e instanceof CredentialsManagerError &&
+      (RETRYABLE.has(e.type) || isRetryableIosCode(e.code))
+    ) {
       throw new ApiError(0, 'NETWORK', 'Could not reach the server. Check your connection.');
     }
     // Deliberately not an ApiError — that is the only signal that reaches onUnauthorized().
