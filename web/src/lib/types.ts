@@ -25,6 +25,37 @@ export type Member = {
   hourly_rate_cents: number | null;
 };
 
+/**
+ * One member's day of payroll. Every cents figure is computed by the backend — the web
+ * only formats them, so nothing here is ever re-derived on the client.
+ */
+export interface ReportRow {
+  user: {id: string; name: string; email: string};
+  minutes: number;
+  /** null when the employer never set a rate. Employer-only data. */
+  hourly_rate_cents: number | null;
+  /** null exactly when hourly_rate_cents is: unknown pay, which renders blank, not zero. */
+  base_pay_cents: number | null;
+  /** Minute-proportional share of the day's tip pool; owed even with no rate set. */
+  tip_share_cents: number;
+  total_cents: number;
+}
+
+/** One calendar day of payroll, carrying its own totals so the table never re-adds cents. */
+export interface ReportDay {
+  /** YYYY-MM-DD in the employer's zone — the day each shift clocked in on. */
+  date: string;
+  /** The day's tip pool. Equals total_tip_share_cents whenever anybody worked; it differs
+   *  only on a day with a tip and no minutes — the unassigned tip the employer must see. */
+  tip_cents: number;
+  total_minutes: number;
+  total_base_pay_cents: number;
+  total_tip_share_cents: number;
+  total_cents: number;
+  /** Ordered by member name. [] on an unassigned-tip day. */
+  rows: ReportRow[];
+}
+
 export type EntryStatus = 'open' | 'closed';
 
 /** A shift as the employer sees it. No coordinates by design — only the verdict. */

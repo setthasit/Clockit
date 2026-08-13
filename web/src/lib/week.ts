@@ -84,6 +84,27 @@ export function weekDays(weekStart: DayKey): DayKey[] {
   return Array.from({length: DAYS_PER_WEEK}, (_, i) => addDays(weekStart, i));
 }
 
+/**
+ * Whether `value` is a real calendar date. The shape test alone would accept "2026-02-31",
+ * which the backend rejects with a 400 — the round-trip catches it, because addDays
+ * normalises it to March. Guards day keys arriving from the query string.
+ */
+export function isDayKey(value: string): value is DayKey {
+  return DAY_KEY.test(value) && addDays(value, 0) === value;
+}
+
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The first and last day of the calendar month containing `day`. */
+export function monthOf(day: DayKey): {start: DayKey; end: DayKey} {
+  const start = `${day.slice(0, 7)}-01`;
+  const [year, month] = start.split('-').map(Number);
+  // Month lengths and leap years come from Date.UTC rather than a table: the first of the
+  // next month, stepped back one day, is the last of this one in every month.
+  const nextMonth = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+  return {start, end: addDays(nextMonth, -1)};
+}
+
 /** Minutes `tz` is ahead of UTC at the instant `ms`. */
 function offsetMinutes(ms: number, tz: string): number {
   const {day, minutes} = zonedDate(new Date(ms), tz);

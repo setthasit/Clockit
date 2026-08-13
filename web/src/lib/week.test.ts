@@ -4,7 +4,9 @@ import {
   assignLanes,
   colorFor,
   dayKey,
+  isDayKey,
   layoutWeek,
+  monthOf,
   minutesSinceMidnight,
   segmentsFor,
   startOfDay,
@@ -72,6 +74,26 @@ test('day keys step through months, and weeks start on the Sunday', () => {
   expect(weekDays('2026-03-15').at(-1)).toBe('2026-03-21');
 
   expect(todayKey(NY, new Date('2026-03-15T01:30:00Z'))).toBe('2026-03-14');
+});
+
+test('report ranges: only real calendar days, and months know their own length', () => {
+  // Guards what arrives in ?from&to: the backend 400s on anything that is not a real day,
+  // and a shape-only check would pass the first three of these.
+  expect(isDayKey('2026-02-31')).toBe(false);
+  expect(isDayKey('2026-13-01')).toBe(false);
+  expect(isDayKey('2026-03-32')).toBe(false);
+  expect(isDayKey('2026-3-15')).toBe(false);
+  expect(isDayKey('yesterday')).toBe(false);
+  expect(isDayKey('')).toBe(false);
+  expect(isDayKey('2026-03-15')).toBe(true);
+  expect(isDayKey('2028-02-29')).toBe(true);
+
+  // The "This month" preset: 30- and 31-day months, February, and a leap February.
+  expect(monthOf('2026-03-15')).toEqual({start: '2026-03-01', end: '2026-03-31'});
+  expect(monthOf('2026-04-30')).toEqual({start: '2026-04-01', end: '2026-04-30'});
+  expect(monthOf('2026-02-01')).toEqual({start: '2026-02-01', end: '2026-02-28'});
+  expect(monthOf('2028-02-10')).toEqual({start: '2028-02-01', end: '2028-02-29'});
+  expect(monthOf('2026-12-25')).toEqual({start: '2026-12-01', end: '2026-12-31'});
 });
 
 test('a day begins at midnight in the employer zone, not at UTC midnight', () => {
