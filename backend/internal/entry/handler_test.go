@@ -268,6 +268,9 @@ type testAPI struct {
 	handler http.Handler
 	key     *rsa.PrivateKey
 	db      *mongo.Database
+	// writes is the driver's write-command stream, for the assertions that care
+	// how many commands a request took rather than only what it stored.
+	writes *writeLog
 }
 
 // newTestAPI wires the real route stack — httpx.NewEcho, the auth middleware
@@ -281,7 +284,7 @@ func newTestAPI(t *testing.T) *testAPI {
 	if addr == "" {
 		t.Skip("VALKEY_ADDR not set")
 	}
-	db, env := testDB(t)
+	db, env, writes := testDBWithWrites(t)
 
 	vk, err := valkey.NewClient(valkey.ClientOption{InitAddress: []string{addr}})
 	if err != nil {
@@ -298,10 +301,10 @@ func newTestAPI(t *testing.T) *testAPI {
 		Auth0Audience: testAuth0Audience,
 		MaxAccuracyM:  100,
 		MaxClockSkew:  5 * time.Minute,
+		MaxQueuedAge:  72 * time.Hour,
 		AnchorRadiusM: 1000,
 		// High enough that no test trips the limiter; the limiter itself is
 		// covered in valkeyx.
-		MaxQueuedAge:    72 * time.Hour,
 		SpeedAnomalyKMH: 200,
 		RateLimitPerMin: 1000,
 	}
@@ -312,7 +315,7 @@ func newTestAPI(t *testing.T) *testAPI {
 	user.RegisterRoutes(e, user.NewHandler(userStore), authMW, vk, cfg)
 	employer.RegisterRoutes(e, employer.NewHandler(employerStore), userStore, authMW, vk, cfg)
 	RegisterRoutes(e, NewHandler(NewStore(db, env), employerStore, cfg), userStore, authMW, vk, cfg)
-	return &testAPI{handler: e, key: key, db: db}
+	return &testAPI{handler: e, key: key, db: db, writes: writes}
 }
 
 // token mints a verified identity; the subject is derived from the address so
@@ -380,11 +383,12 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus in
 }
 
 type entryJSON struct {
-	ID               string  `json:"id"`
-	ClientID         string  `json:"client_id"`
-	EmployerID       *string `json:"employer_id"`
-	Status           string  `json:"status"`
-	LocationVerified bool    `json:"location_verified"`
+	ID               string   `json:"id"`
+	ClientID         string   `json:"client_id"`
+	EmployerID       *string  `json:"employer_id"`
+	Status           string   `json:"status"`
+	LocationVerified bool     `json:"location_verified"`
+	Flags            []string `json:"flags"`
 }
 
 func decodeEntry(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int) entryJSON {
@@ -539,6 +543,88 @@ func TestQueuedClockEventsSyncAndAreFlagged(t *testing.T) {
 		http.StatusCreated)
 	if flags := api.storedEntry(t, prompt.ID).Flags; len(flags) != 0 {
 		t.Fatalf("flags = %v, want none for a fresh queued event", flags)
+	}
+}
+
+// postClockOut drives the endpoint the way the router does, minus the
+// middleware, so a test can set up a shift that was opened days before the
+// close arrives — the one thing a same-process HTTP round trip cannot fake.
+func postClockOut(t *testing.T, h *Handler, u *user.User, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	e := echo.New()
+	e.HTTPErrorHandler = httpx.ErrorHandler
+	req := httptest.NewRequest(http.MethodPost, "/v1/entries/clock-out", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set("clockit.user", u)
+	if err := h.ClockOut(c); err != nil {
+		e.HTTPErrorHandler(err, c)
+	}
+	return rec
+}
+
+// A queued close past the backdating ceiling still closes its shift. Clocked in
+// live on Friday, clocked out into the outbox at 17:00, phone dead until
+// Tuesday: refusing the close cannot un-assert the hours the clock-in already
+// put on record, it can only strand the shift open — and an open shift blocks
+// every later clock-in, with no other route to closing it.
+func TestQueuedClockOutPastTheBoundStillCloses(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	h := NewHandler(s, nil, geoCfg())
+	now := time.Now().UTC()
+
+	open, _, err := s.ClockIn(ctx, u, nil, "c-1", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: now.Add(-96 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Age is the only rule the close is exempt from: a timestamp from the future
+	// is still refused, and the shift stays open for the real close.
+	future := postClockOut(t, h, u, clockJSON("close-0", "", now.Add(time.Hour), vanLat, vanLng, true))
+	assertErrorCode(t, future, http.StatusUnprocessableEntity, "STALE_TIMESTAMP")
+
+	rec := postClockOut(t, h, u, clockJSON("close-1", "", now.Add(-88*time.Hour), vanLat, vanLng, true))
+	if got := decodeEntry(t, rec, http.StatusOK); got.ID != open.ID.Hex() || got.Status != statusClosed {
+		t.Fatalf("entry = %+v, want %s closed", got, open.ID.Hex())
+	}
+	stored, err := s.ByID(ctx, u.ID, open.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != statusClosed || stored.ClockOut == nil {
+		t.Fatalf("stored = %+v, want a closed shift", stored)
+	}
+}
+
+// The backdated flag gets exactly one chance: a retry of the same clock-in
+// short-circuits on the idempotency lookup and never reaches the flag path
+// again. Written as a command of its own it is lost for good when that command
+// fails, so it has to ride in the write that stores the entry.
+func TestBackdatedFlagRidesTheEntryWrite(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "onechance@example.com")
+	now := time.Now().UTC()
+
+	api.writes.reset()
+	opened := decodeEntry(t, api.clockInQueued(token, "c-1", now.Add(-3*time.Hour), vanLat, vanLng),
+		http.StatusCreated)
+	if got := api.writes.on("time_entries"); len(got) != 1 || got[0] != "insert" {
+		t.Fatalf("writes = %v, want the flag inside the single insert", got)
+	}
+	if flags := api.storedEntry(t, opened.ID).Flags; len(flags) != 1 || flags[0] != flagBackdated {
+		t.Fatalf("flags = %v, want [%s]", flags, flagBackdated)
+	}
+
+	api.writes.reset()
+	closed := decodeEntry(t, api.clockOutQueued(token, "close-1", now.Add(-2*time.Hour), vanLat, vanLng),
+		http.StatusOK)
+	if got := api.writes.on("time_entries"); len(got) != 1 || got[0] != "update" {
+		t.Fatalf("writes = %v, want the flag inside the single closing update", got)
+	}
+	if len(closed.Flags) != 1 || closed.Flags[0] != flagBackdated {
+		t.Fatalf("response flags = %v, want [%s]", closed.Flags, flagBackdated)
 	}
 }
 

@@ -173,6 +173,8 @@ Clock-in/out validation (hard reject with a typed error the app can render):
    - **No employer**: clock-in always passes and its location _becomes_ the anchor; clock-out must be within 1000 m of it.
 5. Assigning an employer to a personal entry later re-checks both fixes against the employer anchor and sets `location_verified` — never rejects (the shift already happened); the employer UI shows a verified/unverified badge.
 
+Honest limitation on `MAX_QUEUED_AGE`: 72 h was picked to sit inside a weekly payroll cycle, but nothing enforces that — there is no period close or lock anywhere in the system, so an employer who has already paid a week can still receive a shift dated inside it. Because the report computes on read (§4.6), such a shift also re-splits that day's tip pool, changing shares that may already have been paid out. The `backdated` flag is the only signal and it currently reaches only `/v1/employers/{id}/entries`, not the report rows the employer pays from. Period locking is the real fix and is out of v1 scope.
+
 Background pings: not validated against the anchor (people move); a ping implying > 200 km/h since the previous one adds a `speed_anomaly` flag to the entry instead of rejecting.
 
 Honest limitation: coordinates come from the client, so a rooted device or patched app can fake them. The mock flag + accuracy + staleness + speed checks stop casual spoofing (mock-location apps). The real fix is device attestation — **Play Integrity API (Android) / App Attest (iOS)** — listed as a hardening phase, not v1.

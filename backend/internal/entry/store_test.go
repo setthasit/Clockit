@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
@@ -22,15 +23,65 @@ import (
 	"github.com/setthasit/clockit/backend/internal/user"
 )
 
+// writeLog records the write commands the driver sends. It exists for one
+// assertion: a flag that cannot be re-raised has to ride in the same command as
+// the entry it describes, and only the command stream shows whether it did.
+type writeLog struct {
+	mu  sync.Mutex
+	cmd []writeCmd
+}
+
+type writeCmd struct{ name, collection string }
+
+var writeCommands = map[string]bool{"insert": true, "update": true, "findAndModify": true, "delete": true}
+
+func (l *writeLog) monitor() *event.CommandMonitor {
+	return &event.CommandMonitor{Started: func(_ context.Context, e *event.CommandStartedEvent) {
+		// Every command names its collection in the field named after itself.
+		coll, ok := e.Command.Lookup(e.CommandName).StringValueOK()
+		if !ok || !writeCommands[e.CommandName] {
+			return
+		}
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.cmd = append(l.cmd, writeCmd{name: e.CommandName, collection: coll})
+	}}
+}
+
+// on returns the write commands sent to one collection since the last reset.
+func (l *writeLog) on(collection string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := []string{}
+	for _, c := range l.cmd {
+		if c.collection == collection {
+			out = append(out, c.name)
+		}
+	}
+	return out
+}
+
+func (l *writeLog) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cmd = nil
+}
+
 // testDB is shared with the handler tests, which need the same database and
 // envelope for the user and employer stores as well.
 func testDB(t *testing.T) (*mongo.Database, *crypto.Envelope) {
+	db, env, _ := testDBWithWrites(t)
+	return db, env
+}
+
+func testDBWithWrites(t *testing.T) (*mongo.Database, *crypto.Envelope, *writeLog) {
 	t.Helper()
 	uri := os.Getenv("MONGO_URI")
 	if uri == "" {
 		t.Skip("MONGO_URI not set")
 	}
-	client, err := mongo.Connect(options.Client().ApplyURI(uri))
+	writes := &writeLog{}
+	client, err := mongo.Connect(options.Client().ApplyURI(uri).SetMonitor(writes.monitor()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +111,7 @@ func testDB(t *testing.T) (*mongo.Database, *crypto.Envelope) {
 	if err := mongox.EnsureIndexes(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	return db, env
+	return db, env, writes
 }
 
 func testStore(t *testing.T) (*Store, *user.User) {

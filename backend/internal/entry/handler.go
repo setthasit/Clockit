@@ -199,7 +199,7 @@ func (h *Handler) clockIn(c echo.Context, obs *clockObs) error {
 		return appErr
 	}
 
-	e, replayed, err := h.store.ClockIn(ctx, u, employerID, clientID, fix)
+	e, replayed, err := h.store.ClockIn(ctx, u, employerID, clientID, fix, h.backdatedFlags(fix)...)
 	if errors.Is(err, ErrOpenEntryExists) {
 		return httpx.OpenEntryExists()
 	}
@@ -210,24 +210,22 @@ func (h *Handler) clockIn(c echo.Context, obs *clockObs) error {
 		obs.replay = true
 		return h.respond(c, http.StatusOK, u, e)
 	}
-	if err := h.markBackdated(ctx, e, fix); err != nil {
-		return err
-	}
 	return h.respond(c, http.StatusCreated, u, e)
 }
 
-// markBackdated flags a shift whose timestamp only passed because the client
+// backdatedFlags marks a shift whose timestamp only passed because the client
 // said it was queued. Only events genuinely older than the freshness rule are
 // marked: flagging every offline replay — most of which flush seconds later —
 // would bury the employer in a signal they would learn to ignore.
-func (h *Handler) markBackdated(ctx context.Context, e *Entry, f Fix) error {
-	if !f.Queued || time.Since(f.At) <= h.cfg.MaxClockSkew || slices.Contains(e.Flags, flagBackdated) {
-		return nil
+//
+// The result rides along in the entry's own write rather than a follow-up
+// update, because this flag has exactly one chance: the request that raises it
+// is the request that stores the event, and a retry short-circuits on the
+// idempotency lookup and never reaches this path again.
+func (h *Handler) backdatedFlags(f Fix) []string {
+	if f.Queued && time.Since(f.At) > h.cfg.MaxClockSkew {
+		return []string{flagBackdated}
 	}
-	if err := h.store.Flag(ctx, e, flagBackdated); err != nil {
-		return err
-	}
-	e.Flags = append(e.Flags, flagBackdated)
 	return nil
 }
 
@@ -283,18 +281,15 @@ func (h *Handler) clockOut(c echo.Context, obs *clockObs) error {
 		return err
 	}
 	obs.anchor = anchor
-	if appErr := ValidateFix(h.cfg, time.Now(), fix, anchor); appErr != nil {
+	if appErr := ValidateClose(h.cfg, time.Now(), fix, anchor); appErr != nil {
 		return appErr
 	}
 
-	e, err := h.store.ClockOut(ctx, u, open, clientID, fix)
+	e, err := h.store.ClockOut(ctx, u, open, clientID, fix, h.backdatedFlags(fix)...)
 	if errors.Is(err, ErrEntryNotOpen) {
 		return h.closedOrConflict(c, u, clientID, obs)
 	}
 	if err != nil {
-		return err
-	}
-	if err := h.markBackdated(ctx, e, fix); err != nil {
 		return err
 	}
 	// 200, not 201: closing a shift updates the entry created at clock-in.

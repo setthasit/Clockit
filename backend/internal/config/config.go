@@ -62,6 +62,11 @@ func Load() (Config, error) {
 	if cfg.MaxQueuedAge, err = getdur("MAX_QUEUED_AGE", 72*time.Hour); err != nil {
 		return Config{}, err
 	}
+	// Below the skew rule the ceiling would make a queued event stricter than a
+	// live one, and answer with a QUEUED_TOO_OLD that blames the wrong thing.
+	if cfg.MaxQueuedAge < cfg.MaxClockSkew {
+		return Config{}, fmt.Errorf("MAX_QUEUED_AGE must not be shorter than MAX_CLOCK_SKEW")
+	}
 
 	if cfg.MongoURI == "" {
 		return Config{}, fmt.Errorf("MONGO_URI is required")

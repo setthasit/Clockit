@@ -3,6 +3,7 @@ package entry
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -154,7 +155,10 @@ func (s *Store) findOne(ctx context.Context, filter bson.M) (*Entry, error) {
 //
 // The returned bool reports that an equivalent entry already existed, so the
 // caller answers 200 instead of 201.
-func (s *Store) ClockIn(ctx context.Context, u *user.User, employerID *bson.ObjectID, clientID string, f Fix) (*Entry, bool, error) {
+//
+// flags are stored with the entry rather than added afterwards: a verdict the
+// caller can only reach once must not depend on a second command succeeding.
+func (s *Store) ClockIn(ctx context.Context, u *user.User, employerID *bson.ObjectID, clientID string, f Fix, flags ...string) (*Entry, bool, error) {
 	locEnc, err := s.sealLoc(ctx, u, employer.LatLng{Lat: f.Lat, Lng: f.Lng})
 	if err != nil {
 		return nil, false, err
@@ -167,8 +171,10 @@ func (s *Store) ClockIn(ctx context.Context, u *user.User, employerID *bson.Obje
 		Status:           statusOpen,
 		ClockIn:          ClockPoint{At: msTime(f.At), LocEnc: locEnc, AccuracyM: f.AccuracyM, Mocked: f.Mocked},
 		LocationVerified: true,
-		Flags:            []string{},
-		CreatedAt:        msTime(time.Now()),
+		// Copied, and never nil: the document stores an empty array rather than
+		// a null, which is what every reader of Flags expects.
+		Flags:     append([]string{}, flags...),
+		CreatedAt: msTime(time.Now()),
 	}
 
 	_, err = s.entries.InsertOne(ctx, e)
@@ -197,18 +203,22 @@ func (s *Store) ClockIn(ctx context.Context, u *user.User, employerID *bson.Obje
 //
 // ErrEntryNotOpen means another request closed the shift first; the caller
 // decides whether that was this same close replayed.
-func (s *Store) ClockOut(ctx context.Context, u *user.User, e *Entry, clientID string, f Fix) (*Entry, error) {
+//
+// flags ride in the closing update for the same reason as in ClockIn.
+func (s *Store) ClockOut(ctx context.Context, u *user.User, e *Entry, clientID string, f Fix, flags ...string) (*Entry, error) {
 	locEnc, err := s.sealLoc(ctx, u, employer.LatLng{Lat: f.Lat, Lng: f.Lng})
 	if err != nil {
 		return nil, err
 	}
 	out := ClockPoint{At: msTime(f.At), LocEnc: locEnc, AccuracyM: f.AccuracyM, Mocked: f.Mocked}
 
+	update := bson.M{"$set": bson.M{"clock_out": out, "status": statusClosed, "close_client_id": clientID}}
+	if len(flags) > 0 {
+		update["$addToSet"] = bson.M{"flags": bson.M{"$each": flags}}
+	}
 	// ponytail: the status guard in the filter is the entire concurrency story —
 	// two racing closes, one winner, no transaction and no extra round trip.
-	res, err := s.entries.UpdateOne(ctx,
-		bson.M{"_id": e.ID, "status": statusOpen},
-		bson.M{"$set": bson.M{"clock_out": out, "status": statusClosed, "close_client_id": clientID}})
+	res, err := s.entries.UpdateOne(ctx, bson.M{"_id": e.ID, "status": statusOpen}, update)
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +230,14 @@ func (s *Store) ClockOut(ctx context.Context, u *user.User, e *Entry, clientID s
 	closed.ClockOut = &out
 	closed.Status = statusClosed
 	closed.CloseClientID = clientID
+	// Mirror $addToSet, so the entry handed back is the document that was
+	// written. Cloned first: the copy must not append into e's array.
+	closed.Flags = slices.Clone(e.Flags)
+	for _, flag := range flags {
+		if !slices.Contains(closed.Flags, flag) {
+			closed.Flags = append(closed.Flags, flag)
+		}
+	}
 	return &closed, nil
 }
 
@@ -281,7 +299,9 @@ func (s *Store) AddPings(ctx context.Context, u *user.User, entryID bson.ObjectI
 //
 // ponytail: no transaction with the ping insert — a flag is evidence about
 // pings that are already stored, and losing it in a crash costs nothing a later
-// batch cannot re-raise.
+// batch cannot re-raise. That rationale is the precondition, not a licence: a
+// verdict nothing re-raises belongs in the write it describes (see the flags
+// argument of ClockIn and ClockOut), never here.
 func (s *Store) Flag(ctx context.Context, e *Entry, flag string) error {
 	_, err := s.entries.UpdateOne(ctx,
 		bson.M{"_id": e.ID, "user_id": e.UserID},

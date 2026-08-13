@@ -67,6 +67,19 @@ func ValidateFix(cfg config.Config, now time.Time, f Fix, anchor *employer.LatLn
 	return nil
 }
 
+// ValidateClose is ValidateFix for the event that ends a shift: every rule
+// still applies except the backdating ceiling.
+//
+// A close asserts no hours the clock-in did not already put on record, and that
+// clock-in passed the ceiling when it was accepted. Refusing a late close cannot
+// take those hours back — it can only strand the shift open, and an open shift
+// blocks every later clock-in with no other way to close it (design §4.5).
+func ValidateClose(cfg config.Config, now time.Time, f Fix, anchor *employer.LatLng) *httpx.AppError {
+	// config.Config is a value, so this widens the ceiling for this call alone.
+	cfg.MaxQueuedAge = math.MaxInt64
+	return ValidateFix(cfg, now, f, anchor)
+}
+
 // SpeedAnomaly reports an impossible ground speed between two consecutive
 // fixes. Pings are never rejected for where they are — people move (design
 // §4.5) — so this only decides whether the entry gets flagged.
