@@ -1,34 +1,27 @@
 import {useEffect, useMemo, useState} from 'react';
 import {Button} from '@astryxdesign/core/Button';
 import {HStack, VStack} from '@astryxdesign/core/Layout';
-import {StatusDot} from '@astryxdesign/core/StatusDot';
 import {Text} from '@astryxdesign/core/Text';
-import {Tooltip} from '@astryxdesign/core/Tooltip';
-import {dayLabel, timeRange} from '../lib/format';
+import {dayLabel} from '../lib/format';
 import type {EmployerEntry} from '../lib/types';
 import {
   addDays,
-  colorFor,
   layoutWeek,
+  ROW_HEIGHT,
   todayKey,
   weekDays,
   weekStartOf,
   type DayKey,
-  type PlacedEntry,
 } from '../lib/week';
+import {EntryBar} from './EntryBar';
 
 const HOURS = Array.from({length: 24}, (_, hour) => hour);
 
-const ROW_HEIGHT = 'var(--spacing-12)';
 const GRID_HEIGHT = `calc(${ROW_HEIGHT} * 24)`;
 // Wide enough for "12:00" plus its inset; built from the scale rather than measured.
 const GUTTER_WIDTH = 'calc(var(--spacing-12) + var(--spacing-4))';
-// The plan asks for 18px; --spacing-5 is the nearest step and still a comfortable target.
-const MIN_BAR_HEIGHT = 'var(--spacing-5)';
 const HAIRLINE = 'var(--border-width) solid var(--color-border)';
 const TODAY_RULE = `calc(var(--border-width) * 3) solid var(--color-accent)`;
-
-const hoursTall = (minutes: number) => `calc(${ROW_HEIGHT} * ${minutes / 60})`;
 
 interface WeekCalendarProps {
   /**
@@ -41,16 +34,9 @@ interface WeekCalendarProps {
   /** The employer's IANA zone. Every time on this grid is wall-clock time in it. */
   tz: string;
   entries: EmployerEntry[];
-  onEntryClick: (entry: EmployerEntry) => void;
 }
 
-export function WeekCalendar({
-  weekStart,
-  onWeekStartChange,
-  tz,
-  entries,
-  onEntryClick,
-}: WeekCalendarProps) {
+export function WeekCalendar({weekStart, onWeekStartChange, tz, entries}: WeekCalendarProps) {
   // Open shifts are drawn up to this instant; without the tick their bars freeze at the
   // minute the page happened to load. `now` feeds the layout memo, so on a week with nothing
   // open — almost every week the employer looks at — the tick would re-segment and re-lane
@@ -152,75 +138,11 @@ export function WeekCalendar({
               backgroundImage: `repeating-linear-gradient(to bottom, var(--color-border) 0, var(--color-border) var(--border-width), transparent var(--border-width), transparent ${ROW_HEIGHT})`,
             }}>
             {placed.get(day)?.map((bar) => (
-              <EntryBarPlaceholder
-                key={`${bar.entry.id}-${bar.day}`}
-                bar={bar}
-                tz={tz}
-                onClick={onEntryClick}
-              />
+              <EntryBar key={`${bar.entry.id}-${bar.day}`} bar={bar} tz={tz} />
             ))}
           </div>
         ))}
       </div>
     </VStack>
-  );
-}
-
-/**
- * ponytail: a stand-in so the grid is demonstrable. Task 5.2 owns the real EntryBar with its
- * popover; it replaces this component's body and inherits the positioning wrapper unchanged.
- */
-function EntryBarPlaceholder({
-  bar,
-  tz,
-  onClick,
-}: {
-  bar: PlacedEntry;
-  tz: string;
-  onClick: (entry: EmployerEntry) => void;
-}) {
-  const {entry, startMin, endMin, lane, laneCount} = bar;
-  const color = colorFor(entry.user.id);
-  const isOpen = entry.clock_out_at === null;
-
-  const label = `${entry.user.name || entry.user.email} · ${timeRange(entry.clock_in_at, entry.clock_out_at, tz)}`;
-  // One tooltip per bar. Text's own truncation tooltip is off, because on an unverified bar
-  // it would open alongside the location warning — two popovers on one hover.
-  const hint = entry.location_verified
-    ? label
-    : `${label} — clocked in outside the work location.`;
-
-  return (
-    <Tooltip content={hint} placement="end">
-      <button
-        type="button"
-        onClick={() => onClick(entry)}
-        style={{
-          position: 'absolute',
-          top: hoursTall(startMin),
-          height: `max(${MIN_BAR_HEIGHT}, ${hoursTall(endMin - startMin)})`,
-          left: `${(lane / laneCount) * 100}%`,
-          width: `${100 / laneCount}%`,
-          display: 'flex',
-          alignItems: 'start',
-          justifyContent: 'space-between',
-          gap: 'var(--spacing-1)',
-          overflow: 'hidden',
-          textAlign: 'start',
-          cursor: 'pointer',
-          padding: 'var(--spacing-1)',
-          borderRadius: 'var(--radius-inner)',
-          backgroundColor: color.background,
-          color: color.text,
-          // Dashed means the clock-in fell outside the anchor radius (design §6.2).
-          border: `var(--border-width) ${entry.location_verified ? 'solid' : 'dashed'} ${color.border}`,
-        }}>
-        <Text type="supporting" color="inherit" maxLines={1} hasTruncateTooltip={false}>
-          {label}
-        </Text>
-        {/* Astryx's own pulse, so reduced-motion is honoured without hand-rolled keyframes. */}
-        {isOpen && <StatusDot variant="success" label="Still clocked in" isPulsing />}
-      </button>
-    </Tooltip>
   );
 }

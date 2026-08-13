@@ -84,6 +84,35 @@ export function weekDays(weekStart: DayKey): DayKey[] {
   return Array.from({length: DAYS_PER_WEEK}, (_, i) => addDays(weekStart, i));
 }
 
+/** Minutes `tz` is ahead of UTC at the instant `ms`. */
+function offsetMinutes(ms: number, tz: string): number {
+  const {day, minutes} = zonedDate(new Date(ms), tz);
+  const [year, month, date] = day.split('-').map(Number);
+  const wallClock = Date.UTC(year, month - 1, date) + minutes * 60_000;
+  // The formatter stops at the minute, so the instant it is compared against must too.
+  return (wallClock - Math.floor(ms / 60_000) * 60_000) / 60_000;
+}
+
+/**
+ * The UTC instant at which `day` begins in `tz`, as RFC3339 — the form the entries API
+ * takes for its window. A calendar date names a wall-clock midnight, and the offset that
+ * midnight sits at is only knowable once you know roughly which instant it is: so guess
+ * from UTC midnight, then correct by the offset actually in force there. The second pass
+ * settles days whose first guess landed on the far side of a DST transition.
+ *
+ * ponytail: on the handful of zones that skip midnight itself (Santiago's spring forward
+ * runs 00:00 straight to 01:00) this settles an hour early, widening the window rather
+ * than narrowing it — harmless for a query bound, since layoutWeek drops what falls
+ * outside the displayed days. Upgrade path if an exact bound is ever needed: keep
+ * iterating until the offset stops changing and take the later instant.
+ */
+export function startOfDay(day: DayKey, tz: string): string {
+  const [year, month, date] = day.split('-').map(Number);
+  const utcMidnight = Date.UTC(year, month - 1, date);
+  const guess = utcMidnight - offsetMinutes(utcMidnight, tz) * 60_000;
+  return new Date(utcMidnight - offsetMinutes(guess, tz) * 60_000).toISOString();
+}
+
 export interface Segment {
   day: DayKey;
   startMin: number;
@@ -202,6 +231,18 @@ export function layoutWeek(
   }
 
   return new Map([...buckets].map(([day, segments]) => [day, assignLanes(segments)]));
+}
+
+/**
+ * The height of one hour row. It lives here rather than in WeekCalendar because EntryBar
+ * measures its bars against it, and importing it from WeekCalendar — which renders
+ * EntryBar — would make the two modules cyclic.
+ */
+export const ROW_HEIGHT = 'var(--spacing-12)';
+
+/** A duration in minutes as grid height. */
+export function hoursTall(minutes: number): string {
+  return `calc(${ROW_HEIGHT} * ${minutes / 60})`;
 }
 
 /**

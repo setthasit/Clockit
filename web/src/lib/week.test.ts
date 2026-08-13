@@ -7,6 +7,7 @@ import {
   layoutWeek,
   minutesSinceMidnight,
   segmentsFor,
+  startOfDay,
   todayKey,
   weekDays,
   weekStartOf,
@@ -68,6 +69,33 @@ test('day keys step through months, and weeks start on the Sunday', () => {
   expect(weekDays('2026-03-15').at(-1)).toBe('2026-03-21');
 
   expect(todayKey(NY, new Date('2026-03-15T01:30:00Z'))).toBe('2026-03-14');
+});
+
+test('a day begins at midnight in the employer zone, not at UTC midnight', () => {
+  // The window the entries API is asked for is built from these, so an hour of error here
+  // is an hour of shifts missing off one end of the week.
+  expect(startOfDay('2026-03-15', 'UTC')).toBe('2026-03-15T00:00:00.000Z');
+  expect(startOfDay('2026-03-15', NY)).toBe('2026-03-15T04:00:00.000Z');
+  // Same zone in winter: an offset read once and reused would put this at 04:00 too.
+  expect(startOfDay('2026-01-15', NY)).toBe('2026-01-15T05:00:00.000Z');
+
+  // Zones ahead of UTC start their day on the previous UTC date, and not on the hour.
+  expect(startOfDay('2026-03-15', KOLKATA)).toBe('2026-03-14T18:30:00.000Z');
+  expect(startOfDay('2026-03-15', EUCLA)).toBe('2026-03-14T15:15:00.000Z');
+  expect(startOfDay('2026-03-15', TOKYO)).toBe('2026-03-14T15:00:00.000Z');
+
+  // The transition days themselves: UTC midnight falls on the far side of both, so the
+  // first guess reads the outgoing offset and the correction pass has to undo it.
+  expect(startOfDay('2026-03-08', NY)).toBe('2026-03-08T05:00:00.000Z');
+  expect(startOfDay('2026-11-01', NY)).toBe('2026-11-01T04:00:00.000Z');
+
+  // And it round-trips: the instant returned is minute zero of that day in that zone.
+  for (const tz of [NY, TOKYO, KOLKATA, EUCLA]) {
+    for (const day of weekDays('2026-03-08')) {
+      expect(dayKey(startOfDay(day, tz), tz)).toBe(day);
+      expect(minutesSinceMidnight(startOfDay(day, tz), tz)).toBe(0);
+    }
+  }
 });
 
 test('a shift inside one day is a single segment', () => {
