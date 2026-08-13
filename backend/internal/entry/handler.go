@@ -37,6 +37,7 @@ func RegisterRoutes(e *echo.Echo, h *Handler, userStore *user.Store, authMW echo
 	userMW := user.Middleware(userStore)
 	rateLimit := valkeyx.RateLimit(vk, cfg)
 	e.POST("/v1/entries/clock-in", h.ClockIn, authMW, rateLimit, userMW)
+	e.POST("/v1/entries/clock-out", h.ClockOut, authMW, rateLimit, userMW)
 }
 
 // clockPointView carries plaintext coordinates: this projection is only ever
@@ -76,6 +77,20 @@ type clockRequest struct {
 	Mocked     bool      `json:"mocked"`
 }
 
+// ponytail: presence and length only; clients send a UUIDv4 and the unique
+// index is what actually has to hold. Parse it as a UUID if a stricter contract
+// ever earns its keep.
+func (r *clockRequest) clientID() (string, error) {
+	id := strings.TrimSpace(r.ClientID)
+	if id == "" {
+		return "", httpx.Invalid("client_id is required")
+	}
+	if len(id) > maxClientIDLen {
+		return "", httpx.Invalid("client_id is too long")
+	}
+	return id, nil
+}
+
 // fix shapes the body into a Fix. Only presence and range are checked here; the
 // design §4.5 rules run later, after the idempotency lookup, so a replay of an
 // old event is not rejected for being old.
@@ -96,7 +111,7 @@ func (r *clockRequest) fix() (Fix, error) {
 	if *l.Accuracy < 0 {
 		return Fix{}, httpx.Invalid("accuracy must not be negative")
 	}
-	return Fix{Lat: *l.Lat, Lng: *l.Lng, AccuracyM: *l.Accuracy, At: r.At, Mocked: r.Mocked}, nil
+	return Fix{Lat: *l.Lat, Lng: *l.Lng, AccuracyM: *l.Accuracy, At: msTime(r.At), Mocked: r.Mocked}, nil
 }
 
 func (h *Handler) ClockIn(c echo.Context) error {
@@ -104,12 +119,9 @@ func (h *Handler) ClockIn(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return httpx.Invalid("malformed body")
 	}
-	clientID := strings.TrimSpace(req.ClientID)
-	// ponytail: presence and length only; clients send a UUIDv4 and the unique
-	// index is what actually has to hold. Parse it as a UUID if a stricter
-	// contract ever earns its keep.
-	if clientID == "" || len(clientID) > maxClientIDLen {
-		return httpx.Invalid("client_id is required")
+	clientID, err := req.clientID()
+	if err != nil {
+		return err
 	}
 	fix, err := req.fix()
 	if err != nil {
@@ -152,6 +164,98 @@ func (h *Handler) ClockIn(c echo.Context) error {
 		return h.respond(c, http.StatusOK, u, e)
 	}
 	return h.respond(c, http.StatusCreated, u, e)
+}
+
+func (h *Handler) ClockOut(c echo.Context) error {
+	var req clockRequest
+	if err := c.Bind(&req); err != nil {
+		return httpx.Invalid("malformed body")
+	}
+	clientID, err := req.clientID()
+	if err != nil {
+		return err
+	}
+	fix, err := req.fix()
+	if err != nil {
+		return err
+	}
+
+	ctx := c.Request().Context()
+	u := user.CurrentUser(c)
+
+	// Idempotency first, same reason as clock-in: a replayed close must return
+	// the closed entry rather than fail the location rules a second time.
+	closed, err := h.store.ByCloseClientID(ctx, u.ID, clientID)
+	if err != nil {
+		return err
+	}
+	if closed != nil {
+		return h.respond(c, http.StatusOK, u, closed)
+	}
+
+	open, err := h.store.OpenEntry(ctx, u.ID)
+	if err != nil {
+		return err
+	}
+	if open == nil {
+		return httpx.NoOpenEntry()
+	}
+	// Cheap ordering check before the crypto and the employer read.
+	if !fix.At.After(open.ClockIn.At) {
+		return httpx.Invalid("clock-out must be after clock-in")
+	}
+	anchor, err := h.closeAnchor(ctx, u, open)
+	if err != nil {
+		return err
+	}
+	if appErr := ValidateFix(h.cfg, time.Now(), fix, anchor); appErr != nil {
+		return appErr
+	}
+
+	e, err := h.store.ClockOut(ctx, u, open, clientID, fix)
+	if errors.Is(err, ErrEntryNotOpen) {
+		// Lost the race to a concurrent close: either it was this same close
+		// replayed in parallel, or the shift is genuinely gone.
+		if closed, findErr := h.store.ByCloseClientID(ctx, u.ID, clientID); findErr != nil {
+			return findErr
+		} else if closed != nil {
+			return h.respond(c, http.StatusOK, u, closed)
+		}
+		return httpx.NoOpenEntry()
+	}
+	if err != nil {
+		return err
+	}
+	// 200, not 201: closing a shift updates the entry created at clock-in.
+	return h.respond(c, http.StatusOK, u, e)
+}
+
+// closeAnchor measures an employer shift against the employer's centre and a
+// personal one against where it started (design §4.5).
+//
+// Membership is deliberately not re-checked: the shift is already the caller's,
+// and someone removed from the employer mid-shift must still be able to close
+// it rather than stay clocked in forever.
+func (h *Handler) closeAnchor(ctx context.Context, u *user.User, e *Entry) (*employer.LatLng, error) {
+	if e.EmployerID == nil {
+		loc, err := h.store.openLoc(ctx, u, e.ClockIn.LocEnc)
+		if err != nil {
+			return nil, err
+		}
+		return &loc, nil
+	}
+	emp, err := h.employers.Get(ctx, *e.EmployerID)
+	if err != nil {
+		if errors.Is(err, employer.ErrNotFound) {
+			return nil, httpx.NotMember()
+		}
+		return nil, err
+	}
+	anchor, err := h.employers.DecryptAnchor(ctx, emp)
+	if err != nil {
+		return nil, err
+	}
+	return &anchor, nil
 }
 
 // anchor returns the employer's clock-in centre, or nil for a personal entry:

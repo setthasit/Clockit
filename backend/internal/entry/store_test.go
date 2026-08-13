@@ -154,6 +154,91 @@ func TestClockInRejectsASecondOpenShift(t *testing.T) {
 	}
 }
 
+func TestClockOutClosesTheShift(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	in, _, err := s.ClockIn(ctx, u, nil, "c-1", testFix())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := testFix()
+	f.At = in.ClockIn.At.Add(time.Hour)
+	closed, err := s.ClockOut(ctx, u, in, "close-1", f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Status != statusClosed || closed.ClockOut == nil {
+		t.Fatalf("entry = %+v, want a closed entry with a clock-out point", closed)
+	}
+
+	stored, err := s.ByCloseClientID(ctx, u.ID, "close-1")
+	if err != nil || stored == nil || stored.ID != in.ID {
+		t.Fatalf("ByCloseClientID = %+v, %v", stored, err)
+	}
+	// The returned entry must survive a round trip through BSON unchanged, or a
+	// replay would answer with different timestamps than the original close.
+	if !stored.ClockOut.At.Equal(closed.ClockOut.At) || !stored.CreatedAt.Equal(closed.CreatedAt) {
+		t.Fatalf("stored %+v differs from returned %+v", stored.ClockOut.At, closed.ClockOut.At)
+	}
+	if bytes.Contains(stored.ClockOut.LocEnc, []byte("13.75")) {
+		t.Fatalf("clock-out location is not sealed: %q", stored.ClockOut.LocEnc)
+	}
+	loc, err := s.openLoc(ctx, u, stored.ClockOut.LocEnc)
+	if err != nil || loc.Lat != f.Lat || loc.Lng != f.Lng {
+		t.Fatalf("loc = %+v, %v", loc, err)
+	}
+
+	open, err := s.OpenEntry(ctx, u.ID)
+	if err != nil || open != nil {
+		t.Fatalf("OpenEntry = %+v, %v, want nil", open, err)
+	}
+	if _, err := s.ClockOut(ctx, u, in, "close-2", f); !errors.Is(err, ErrEntryNotOpen) {
+		t.Fatalf("second close = %v, want ErrEntryNotOpen", err)
+	}
+}
+
+// The outbox can flush the same clock-out twice at once: exactly one writes, and
+// the loser can still recognise its own close through close_client_id.
+func TestClockOutRaceHasOneWinner(t *testing.T) {
+	ctx := context.Background()
+	s, u := testStore(t)
+	in, _, err := s.ClockIn(ctx, u, nil, "c-1", testFix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := testFix()
+	f.At = in.ClockIn.At.Add(time.Hour)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = s.ClockOut(ctx, u, in, "close-1", f)
+		}()
+	}
+	wg.Wait()
+
+	won := 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case !errors.Is(err, ErrEntryNotOpen):
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d calls closed the shift, want 1", won)
+	}
+	replay, err := s.ByCloseClientID(ctx, u.ID, "close-1")
+	if err != nil || replay == nil || replay.ID != in.ID {
+		t.Fatalf("ByCloseClientID = %+v, %v", replay, err)
+	}
+}
+
 func TestByClientIDIsScopedToTheUser(t *testing.T) {
 	ctx := context.Background()
 	s, u := testStore(t)
