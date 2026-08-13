@@ -71,13 +71,20 @@ export default function History() {
   // not. Every item leaves the queue by being accepted or dropped, so every flush that changed
   // anything changes this number — which is why **9.1 has to call nothing here**.
   //
-  // ponytail: an *enqueue* moves the number too, so a clock-in tapped offline also triggers a
-  // fetch that is certain to fail, and the resulting error line sits under the banner that already
-  // explains it. Ceiling: one wasted request and one redundant message while offline. Upgrade
-  // path: hold the previous depth in a ref and reload only when it falls.
+  // Debounced because the number moves once per *item*, not once per flush: drain() removes
+  // exactly one item per set, so a reconnect that clears a dozen queued actions would otherwise
+  // fire a dozen back-to-back GET /v1/entries — each a 30-day window the server decrypts per
+  // entry, on a route with no rate limiter, from the phone that just got signal back.
+  //
+  // ponytail: a blunt timer, so it also swallows the *enqueue* case — a clock-in tapped offline no
+  // longer costs a fetch certain to fail whose error line sits under the banner already explaining
+  // it — and the batching hole where a removal plus an enqueue coalesce into one unchanged length.
+  // Ceiling: 300 ms of staleness after a real change, and a focus reload delayed by the same.
+  // Upgrade path: hold the previous depth in a ref and reload only when it falls.
   useFocusEffect(
     useCallback(() => {
-      void load();
+      const t = setTimeout(() => void load(), 300);
+      return () => clearTimeout(t);
     }, [load, queued]),
   );
 
@@ -86,9 +93,20 @@ export default function History() {
     void load().finally(() => setRefreshing(false));
   }, [load]);
 
+  // Pings never reach this screen: they are decoration, not hours (stores/outbox.ts), so a dropped
+  // batch costs a polluted track and nothing a worker is owed — counting it under "could not be
+  // synced" is a false alarm about pay. They also carry no entryClientId, so each would render as
+  // its own line, and the one cascade that fills this list (a build stuck on CONFIG) drops up to
+  // MAX_ATTENTION of them with an identical message. Filtered at the input rather than in
+  // buildHistory, which owns the join, not the copy.
+  const attention = useMemo(
+    () => needsAttention.filter((a) => a.kind !== "pings"),
+    [needsAttention],
+  );
+
   const { sections, unmatched } = useMemo(
-    () => buildHistory(entries ?? [], openEntry, needsAttention),
-    [entries, needsAttention, openEntry],
+    () => buildHistory(entries ?? [], openEntry, attention),
+    [entries, attention, openEntry],
   );
 
   // A membership can be revoked while its shift is still on file, so an id may resolve to nothing
@@ -115,12 +133,12 @@ export default function History() {
         </View>
       )}
 
-      {needsAttention.length > 0 && (
+      {attention.length > 0 && (
         <View style={styles.attention}>
           <Text style={styles.attentionTitle}>
-            {needsAttention.length === 1
+            {attention.length === 1
               ? "1 action could not be synced"
-              : `${needsAttention.length} actions could not be synced`}
+              : `${attention.length} actions could not be synced`}
           </Text>
           {/* Records with no row of their own are rendered here or nowhere: a clock-out whose
               clock-in was dropped first names an entry the server never created. */}
@@ -139,13 +157,16 @@ export default function History() {
             </Text>
           )}
           {/* The only caller of clearAttention in the app: these records are permanent otherwise,
-              and nothing else can know the worker has read them. All-or-nothing by design. */}
+              and nothing else can know the worker has read them. All-or-nothing by design — hence
+              "all" in the label: an Attention record is the only surviving trace of a dropped
+              item, and this one tap also wipes the ⚠ marks on rows further down, which the worker
+              sitting under "Marked on the shifts below" has by definition not scrolled to yet. */}
           <Pressable
             accessibilityRole="button"
             onPress={clearAttention}
             style={({ pressed }) => [styles.action, pressed && styles.pressed]}
           >
-            <Text style={styles.actionLabel}>Dismiss</Text>
+            <Text style={styles.actionLabel}>Dismiss all</Text>
           </Pressable>
         </View>
       )}
@@ -183,7 +204,10 @@ export default function History() {
         />
       )}
       renderSectionHeader={({ section }) => (
-        <Text style={styles.day}>{section.title}</Text>
+        // role=header is what lets a screen reader jump day to day instead of walking every row.
+        <Text accessibilityRole="header" style={styles.day}>
+          {section.title}
+        </Text>
       )}
       ListHeaderComponent={header}
       ListEmptyComponent={

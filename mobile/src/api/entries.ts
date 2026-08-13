@@ -20,7 +20,7 @@ export type Entry = {
   location_verified: boolean;
   // Never null (the server normalises to []). Left as string[] rather than a union:
   // nothing validates this at runtime, so a newer server's flag would make a union lie.
-  // Today the only emitted value is 'speed_anomaly'.
+  // Today the emitted values are 'speed_anomaly' and 'backdated' (on both clock paths).
   flags: string[];
   created_at: string;
 };

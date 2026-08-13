@@ -36,7 +36,16 @@ export type History = {
 // while the clock-in sits in the outbox). Merged in rather than left out, because it is the shift
 // the worker is on right now and its absence would read as "that clock-in did nothing" — which is
 // exactly the moment the banner above the list is explaining. Deduped on client_id, the key that
-// survives the round trip, so the server's copy replaces it as soon as one arrives.
+// survives the round trip, so the server's copy replaces it as soon as one arrives. It also
+// rescues a forgotten open entry older than the 30-day window, which the fetch alone would miss.
+//
+// ponytail: merging is all this does, so it cannot *close* a row. Clock in online, then clock out
+// with no signal: clockFlow.clockOutNow clears the pending entry, so openEntry is null and nothing
+// is merged — but the fetched copy is still `status: 'open'`, so the row keeps pulsing "On shift"
+// after the worker has clocked out. Ceiling: a wrong claim about the present, mitigated only by
+// the "N actions waiting to sync" banner above the list. Upgrade path: the outbox would have to
+// expose its queued clock-outs (it exposes only failures today) so the close could be merged the
+// same way the open entry is.
 function withOpenEntry(entries: Entry[], openEntry: Entry | null): Entry[] {
   if (!openEntry || entries.some((e) => e.client_id === openEntry.client_id)) return entries;
   return [openEntry, ...entries];
