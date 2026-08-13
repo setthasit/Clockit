@@ -26,6 +26,7 @@ const GUTTER_WIDTH = 'calc(var(--spacing-12) + var(--spacing-4))';
 // The plan asks for 18px; --spacing-5 is the nearest step and still a comfortable target.
 const MIN_BAR_HEIGHT = 'var(--spacing-5)';
 const HAIRLINE = 'var(--border-width) solid var(--color-border)';
+const TODAY_RULE = `calc(var(--border-width) * 3) solid var(--color-accent)`;
 
 const hoursTall = (minutes: number) => `calc(${ROW_HEIGHT} * ${minutes / 60})`;
 
@@ -51,12 +52,16 @@ export function WeekCalendar({
   onEntryClick,
 }: WeekCalendarProps) {
   // Open shifts are drawn up to this instant; without the tick their bars freeze at the
-  // minute the page happened to load.
+  // minute the page happened to load. `now` feeds the layout memo, so on a week with nothing
+  // open — almost every week the employer looks at — the tick would re-segment and re-lane
+  // every entry each minute to redraw the identical grid.
   const [now, setNow] = useState(() => new Date());
+  const hasOpen = entries.some((e) => e.clock_out_at === null);
   useEffect(() => {
+    if (!hasOpen) return;
     const id = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(id);
-  }, []);
+  }, [hasOpen]);
 
   const days = useMemo(() => weekDays(weekStart), [weekStart]);
   const placed = useMemo(() => layoutWeek(entries, days, tz, now), [entries, days, tz, now]);
@@ -113,11 +118,14 @@ export function WeekCalendar({
               padding: 'var(--spacing-2)',
               textAlign: 'center',
               borderLeft: HAIRLINE,
-              borderBottom: HAIRLINE,
-              backgroundColor:
-                day === today ? 'var(--color-accent-muted)' : 'var(--color-background-surface)',
+              // Today is marked with a brand-coloured rule under its header. --color-accent
+              // is the only token carrying the brand: this theme's accent *text* and
+              // accent-muted *surface* both resolve to the same neutrals as everything
+              // around them, so highlighting with either is invisible.
+              borderBottom: day === today ? TODAY_RULE : HAIRLINE,
+              backgroundColor: 'var(--color-background-surface)',
             }}>
-            <Text type="label" color={day === today ? 'accent' : 'primary'}>
+            <Text type="label" weight={day === today ? 'bold' : undefined}>
               {dayLabel(day, tz)}
             </Text>
           </div>
@@ -175,44 +183,44 @@ function EntryBarPlaceholder({
   const color = colorFor(entry.user.id);
   const isOpen = entry.clock_out_at === null;
 
-  const button = (
-    <button
-      type="button"
-      onClick={() => onClick(entry)}
-      style={{
-        position: 'absolute',
-        top: hoursTall(startMin),
-        height: `max(${MIN_BAR_HEIGHT}, ${hoursTall(endMin - startMin)})`,
-        left: `${(lane / laneCount) * 100}%`,
-        width: `${100 / laneCount}%`,
-        display: 'flex',
-        alignItems: 'start',
-        justifyContent: 'space-between',
-        gap: 'var(--spacing-1)',
-        overflow: 'hidden',
-        textAlign: 'start',
-        cursor: 'pointer',
-        padding: 'var(--spacing-1)',
-        borderRadius: 'var(--radius-inner)',
-        backgroundColor: color.background,
-        color: color.text,
-        // Dashed means the clock-in fell outside the anchor radius (design §6.2).
-        border: `var(--border-width) ${entry.location_verified ? 'solid' : 'dashed'} ${color.border}`,
-      }}>
-      <Text type="supporting" color="inherit" maxLines={1}>
-        {entry.user.name || entry.user.email} ·{' '}
-        {timeRange(entry.clock_in_at, entry.clock_out_at, tz)}
-      </Text>
-      {/* Astryx's own pulse, so reduced-motion is honoured without hand-rolled keyframes. */}
-      {isOpen && <StatusDot variant="success" label="Still clocked in" isPulsing />}
-    </button>
-  );
-
-  if (entry.location_verified) return button;
+  const label = `${entry.user.name || entry.user.email} · ${timeRange(entry.clock_in_at, entry.clock_out_at, tz)}`;
+  // One tooltip per bar. Text's own truncation tooltip is off, because on an unverified bar
+  // it would open alongside the location warning — two popovers on one hover.
+  const hint = entry.location_verified
+    ? label
+    : `${label} — clocked in outside the work location.`;
 
   return (
-    <Tooltip content="Clocked in outside the work location." placement="end">
-      {button}
+    <Tooltip content={hint} placement="end">
+      <button
+        type="button"
+        onClick={() => onClick(entry)}
+        style={{
+          position: 'absolute',
+          top: hoursTall(startMin),
+          height: `max(${MIN_BAR_HEIGHT}, ${hoursTall(endMin - startMin)})`,
+          left: `${(lane / laneCount) * 100}%`,
+          width: `${100 / laneCount}%`,
+          display: 'flex',
+          alignItems: 'start',
+          justifyContent: 'space-between',
+          gap: 'var(--spacing-1)',
+          overflow: 'hidden',
+          textAlign: 'start',
+          cursor: 'pointer',
+          padding: 'var(--spacing-1)',
+          borderRadius: 'var(--radius-inner)',
+          backgroundColor: color.background,
+          color: color.text,
+          // Dashed means the clock-in fell outside the anchor radius (design §6.2).
+          border: `var(--border-width) ${entry.location_verified ? 'solid' : 'dashed'} ${color.border}`,
+        }}>
+        <Text type="supporting" color="inherit" maxLines={1} hasTruncateTooltip={false}>
+          {label}
+        </Text>
+        {/* Astryx's own pulse, so reduced-motion is honoured without hand-rolled keyframes. */}
+        {isOpen && <StatusDot variant="success" label="Still clocked in" isPulsing />}
+      </button>
     </Tooltip>
   );
 }

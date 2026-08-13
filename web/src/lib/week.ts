@@ -6,8 +6,8 @@
 
 import type {EmployerEntry} from './types';
 
-export const MINUTES_PER_DAY = 1440;
-export const DAYS_PER_WEEK = 7;
+const MINUTES_PER_DAY = 1440;
+const DAYS_PER_WEEK = 7;
 
 /** A calendar date in the employer's zone, YYYY-MM-DD. Sorts and compares as a string. */
 export type DayKey = string;
@@ -34,7 +34,7 @@ function formatter(tz: string): Intl.DateTimeFormat {
   return cached;
 }
 
-export interface Zoned {
+interface Zoned {
   day: DayKey;
   /** Minutes since midnight of `day`, 0–1439. */
   minutes: number;
@@ -103,12 +103,30 @@ export interface Segment {
  */
 export function segmentsFor(entry: EmployerEntry, tz: string, now: Date): Segment[] {
   const start = zoned(entry.clock_in_at, tz);
-  const end = entry.clock_out_at ? zoned(entry.clock_out_at, tz) : zonedDate(now, tz);
-  if (!start || !end) return [];
+  if (!start) return [];
 
-  // Clock skew, or an open entry clocked in a moment ahead of this browser: no bar is
-  // better than one drawn upwards.
-  if (end.day < start.day || (end.day === start.day && end.minutes < start.minutes)) return [];
+  const current = zonedDate(now, tz);
+  // ponytail: an open entry stops at the end of its clock-in day. Running it to `now` paints
+  // a full-height bar on every later day of the week after one forgotten clock-out, and those
+  // bars overlap everything, so assignLanes squeezes each real entry on those days to 1/N of
+  // the column and the week becomes unreadable. A bar reaching midnight and still pulsing
+  // reads as "open, ran past the end of the day". Ceiling: a genuine shift longer than 24h is
+  // drawn short. Upgrade path: extend the cap to the employer's maximum shift length once
+  // that setting exists, and keep segmenting to `now` below it.
+  const end = entry.clock_out_at
+    ? zoned(entry.clock_out_at, tz)
+    : current.day > start.day
+      ? {day: start.day, minutes: MINUTES_PER_DAY}
+      : current;
+  if (!end) return [];
+
+  // Clock skew — the backend tolerates ±5 min — or an open entry clocked in a moment ahead of
+  // this browser. A bar drawn upwards is wrong, but dropping the entry is worse: it would
+  // vanish from the calendar while the report still counts it. Zero length lands at
+  // MIN_BAR_HEIGHT and stays clickable.
+  if (end.day < start.day || (end.day === start.day && end.minutes < start.minutes)) {
+    return [{day: start.day, startMin: start.minutes, endMin: start.minutes}];
+  }
 
   if (start.day === end.day) {
     return [{day: start.day, startMin: start.minutes, endMin: end.minutes}];

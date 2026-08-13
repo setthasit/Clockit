@@ -15,6 +15,8 @@ import type {EmployerEntry} from './types';
 
 const NY = 'America/New_York';
 const TOKYO = 'Asia/Tokyo';
+const KOLKATA = 'Asia/Kolkata';
+const EUCLA = 'Australia/Eucla';
 
 function entry(overrides: Partial<EmployerEntry> = {}): EmployerEntry {
   return {
@@ -36,6 +38,11 @@ test('minutes and days come from the employer zone, not the machine zone', () =>
   // 13:02 UTC is 09:02 in a zone behind UTC and 22:02 in one ahead of it.
   expect(minutesSinceMidnight('2026-03-15T13:02:00Z', NY)).toBe(9 * 60 + 2);
   expect(minutesSinceMidnight('2026-03-15T13:02:00Z', TOKYO)).toBe(22 * 60 + 2);
+
+  // Offsets are not all whole hours: India is +05:30 and Eucla +08:45. Any rewrite that
+  // rounds the offset to the hour passes the two above and fails these.
+  expect(minutesSinceMidnight('2026-03-15T13:02:00Z', KOLKATA)).toBe(18 * 60 + 32);
+  expect(minutesSinceMidnight('2026-03-15T13:02:00Z', EUCLA)).toBe(21 * 60 + 47);
 
   // 01:30 UTC is still the previous evening in New York — the zone decides the day, so a
   // bar for this instant belongs in Saturday's column at 21:30, not Sunday's at 01:30.
@@ -101,15 +108,26 @@ test('an open shift runs to now and keeps growing', () => {
     {day: '2026-03-15', startMin: 9 * 60 + 2, endMin: 14 * 60},
   ]);
 
-  // Left running for days: one full-height bar per day in between.
+  // Forgotten clock-out: capped at the end of its own day rather than smothering the days
+  // after it. Runs to midnight of the 15th, nothing on the 16th or 17th.
   expect(segmentsFor(open, NY, new Date('2026-03-17T15:00:00Z'))).toEqual([
     {day: '2026-03-15', startMin: 9 * 60 + 2, endMin: 1440},
-    {day: '2026-03-16', startMin: 0, endMin: 1440},
-    {day: '2026-03-17', startMin: 0, endMin: 11 * 60},
+  ]);
+});
+
+test('a clocked-out-before-clocked-in entry is a zero-length bar, not nothing', () => {
+  // Clock skew — the backend tolerates ±5 min — so the report will show this entry. A bar
+  // drawn upwards is wrong, but vanishing makes the calendar disagree with the report.
+  const skewed = entry({clock_in_at: '2026-03-15T13:02:00Z', clock_out_at: '2026-03-15T12:58:00Z'});
+  expect(segmentsFor(skewed, NY, new Date())).toEqual([
+    {day: '2026-03-15', startMin: 9 * 60 + 2, endMin: 9 * 60 + 2},
   ]);
 
-  // Clock skew the other way would draw a bar upwards; nothing is drawn instead.
-  expect(segmentsFor(open, NY, new Date('2026-03-15T12:00:00Z'))).toEqual([]);
+  // Same for an open entry clocked in a moment ahead of this browser's clock.
+  const open = entry({status: 'open', clock_out_at: null, duration_minutes: null});
+  expect(segmentsFor(open, NY, new Date('2026-03-15T12:00:00Z'))).toEqual([
+    {day: '2026-03-15', startMin: 9 * 60 + 2, endMin: 9 * 60 + 2},
+  ]);
 });
 
 test('bars are placed by wall clock across a DST transition', () => {
