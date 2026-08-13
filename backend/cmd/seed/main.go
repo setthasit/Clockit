@@ -2,14 +2,16 @@
 // history so the web and mobile clients have something to render before anyone
 // has clocked in for real.
 //
-// Every run deletes what it owns before writing — the employers owned by
-// -owner-sub plus their memberships and tips, and the time entries and pings of
-// the seeded users — so re-running replaces the fixture instead of stacking a
-// second copy of it. Ownership is read off the documents themselves rather than
-// a marker written at the end of a run, so a run interrupted halfway still
-// cleans up fully on the next attempt. Seeded users are matched by auth0 sub and
-// reused, never deleted. Never point -owner-sub at a real account: every
-// employer that user owns is purged.
+// Every run deletes what it owns before writing, so re-running replaces the
+// fixture instead of stacking a second copy of it. Exactly this is deleted:
+// every employer OWNED by -owner-sub and all of that employer's memberships and
+// tips, plus all time entries and location pings of the seeded users. Nothing
+// else is touched — an employer someone else owns survives a run intact, even
+// one a seeded user is a member of. Ownership is read off the documents
+// themselves rather than a marker written at the end of a run, so a run
+// interrupted halfway still cleans up on the next attempt. Seeded users are
+// matched by auth0 sub and reused, never deleted. Never point -owner-sub at a
+// real account: every employer that user owns is purged.
 package main
 
 import (
@@ -156,14 +158,23 @@ func userIDs(users []*user.User) []bson.ObjectID {
 }
 
 // purge deletes the previous fixture by the identity this command owns: the
-// owner's employers, whatever hangs off them, and the seeded users' entries.
-// Deleting the entries by user rather than by employer matters — an interrupted
-// run can leave an entry whose employer document never made it, and a leftover
-// entry is what wedges the next run's ClockIn/ClockOut pair.
+// employers the seeded owner owns, whatever hangs off them, and the seeded
+// users' entries. Deleting the entries by user rather than by employer matters —
+// an interrupted run can leave an entry whose employer document never made it,
+// and a leftover entry is what wedges the next run's ClockIn/ClockOut pair.
+//
+// Employers are found by ownership only, never by walking back from a seeded
+// user's memberships or entries: a seeded employee may also be a member of a
+// real employer, and reaching employers through them would delete that
+// employer's memberships and tips.
 func purge(ctx context.Context, db *mongo.Database, employers *employer.Store, ownerID bson.ObjectID, users []bson.ObjectID) error {
-	employerIDs, err := seededEmployerIDs(ctx, db, employers, ownerID, users)
+	owned, err := employers.ListByOwner(ctx, ownerID)
 	if err != nil {
-		return err
+		return fmt.Errorf("purge: list employers: %w", err)
+	}
+	employerIDs := make([]bson.ObjectID, 0, len(owned))
+	for _, e := range owned {
+		employerIDs = append(employerIDs, e.ID)
 	}
 
 	byUser := bson.M{"user_id": bson.M{"$in": users}}
@@ -184,42 +195,6 @@ func purge(ctx context.Context, db *mongo.Database, employers *employer.Store, o
 		}
 	}
 	return nil
-}
-
-// seededEmployerIDs is every employer this command has ever created for the
-// owner. The employer document is the obvious source, but it is also the thing
-// most likely to be missing: a run interrupted after its memberships and entries
-// landed leaves children pointing at an employer that no longer exists, and
-// tips are reachable by nothing else. So the ids are also read back off the
-// children that do carry a user link.
-func seededEmployerIDs(ctx context.Context, db *mongo.Database, employers *employer.Store,
-	ownerID bson.ObjectID, users []bson.ObjectID,
-) ([]bson.ObjectID, error) {
-	owned, err := employers.ListByOwner(ctx, ownerID)
-	if err != nil {
-		return nil, fmt.Errorf("purge: list employers: %w", err)
-	}
-	seen := make(map[bson.ObjectID]bool, len(owned))
-	for _, e := range owned {
-		seen[e.ID] = true
-	}
-
-	byUser := bson.M{"user_id": bson.M{"$in": users}, "employer_id": bson.M{"$type": "objectId"}}
-	for _, name := range []string{"memberships", "time_entries"} {
-		var ids []bson.ObjectID
-		if err := db.Collection(name).Distinct(ctx, "employer_id", byUser).Decode(&ids); err != nil {
-			return nil, fmt.Errorf("purge: employer ids from %s: %w", name, err)
-		}
-		for _, id := range ids {
-			seen[id] = true
-		}
-	}
-
-	out := make([]bson.ObjectID, 0, len(seen))
-	for id := range seen {
-		out = append(out, id)
-	}
-	return out, nil
 }
 
 // ensureUser provisions through the same JIT path a first login takes, so the
