@@ -18,6 +18,9 @@ const NY = 'America/New_York';
 const TOKYO = 'Asia/Tokyo';
 const KOLKATA = 'Asia/Kolkata';
 const EUCLA = 'Australia/Eucla';
+const SANTIAGO = 'America/Santiago';
+const HAVANA = 'America/Havana';
+const BEIRUT = 'Asia/Beirut';
 
 function entry(overrides: Partial<EmployerEntry> = {}): EmployerEntry {
   return {
@@ -89,13 +92,29 @@ test('a day begins at midnight in the employer zone, not at UTC midnight', () =>
   expect(startOfDay('2026-03-08', NY)).toBe('2026-03-08T05:00:00.000Z');
   expect(startOfDay('2026-11-01', NY)).toBe('2026-11-01T04:00:00.000Z');
 
-  // And it round-trips: the instant returned is minute zero of that day in that zone.
+  // Zones that spring forward at midnight: 00:00 never happens, so the day starts at the
+  // transition. Neither probe lands on it, and settling for the earlier one puts the whole
+  // week's `to` bound on the previous day — dropping every shift of that Saturday evening.
+  // Both transitions fall on a Sunday, which is what weekStart + 7 always is.
+  expect(startOfDay('2026-09-06', SANTIAGO)).toBe('2026-09-06T04:00:00.000Z');
+  expect(startOfDay('2026-03-08', HAVANA)).toBe('2026-03-08T05:00:00.000Z');
+
+  // And it round-trips: the instant returned lands on the day it names, in that zone.
+  for (const tz of [NY, TOKYO, KOLKATA, EUCLA, SANTIAGO, HAVANA, BEIRUT]) {
+    for (const day of weekDays('2026-03-08').concat(weekDays('2026-09-06'))) {
+      expect(dayKey(startOfDay(day, tz), tz)).toBe(day);
+    }
+  }
+
+  // Minute zero, though, only where midnight exists. Beirut and Cairo also jump 00:00 to
+  // 01:00, so the correct answer there reads 60 — asserting 0 universally would demand a
+  // wrong instant.
   for (const tz of [NY, TOKYO, KOLKATA, EUCLA]) {
     for (const day of weekDays('2026-03-08')) {
-      expect(dayKey(startOfDay(day, tz), tz)).toBe(day);
       expect(minutesSinceMidnight(startOfDay(day, tz), tz)).toBe(0);
     }
   }
+  expect(minutesSinceMidnight(startOfDay('2026-03-29', BEIRUT), BEIRUT)).toBe(60);
 });
 
 test('a shift inside one day is a single segment', () => {

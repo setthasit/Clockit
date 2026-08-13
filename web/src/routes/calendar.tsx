@@ -65,7 +65,19 @@ export function CalendarRoute() {
           status="error"
           title="Could not load this week"
           description="Check your connection and try again."
-          endContent={<Button label="Retry" variant="secondary" size="sm" onClick={() => setAttempt((n) => n + 1)} />}
+          endContent={
+            <Button
+              label="Retry"
+              variant="secondary"
+              size="sm"
+              // Back to the skeleton: the banner hides it, so leaving the banner up until
+              // the retry resolves reads as a dead button.
+              onClick={() => {
+                setHasFailed(false);
+                setAttempt((n) => n + 1);
+              }}
+            />
+          }
         />
       )}
 

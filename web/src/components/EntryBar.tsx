@@ -69,6 +69,8 @@ export function EntryBar({bar, tz}: EntryBarProps) {
       {/* Suppressed while the popover is open: the pointer is still over the bar, so both
           would float over the same spot saying the same thing. */}
       <Tooltip content={hint} placement="end" isEnabled={!isPopoverOpen}>
+        {/* A raw element under the hand-rolled-grid exception documented in WeekCalendar:
+            no Astryx component places a child to the minute inside an hour column. */}
         <button
           ref={triggerRef}
           type="button"

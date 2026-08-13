@@ -100,17 +100,29 @@ function offsetMinutes(ms: number, tz: string): number {
  * from UTC midnight, then correct by the offset actually in force there. The second pass
  * settles days whose first guess landed on the far side of a DST transition.
  *
- * ponytail: on the handful of zones that skip midnight itself (Santiago's spring forward
- * runs 00:00 straight to 01:00) this settles an hour early, widening the window rather
- * than narrowing it — harmless for a query bound, since layoutWeek drops what falls
- * outside the displayed days. Upgrade path if an exact bound is ever needed: keep
- * iterating until the offset stops changing and take the later instant.
+ * Where wall-clock midnight does not exist — Santiago and Havana spring forward at
+ * midnight, running 00:00 straight to 01:00 — neither pass lands on `day`, and the day
+ * begins at the transition itself: the later of the two candidates. Iterating instead of
+ * choosing would never terminate, because the two candidates trade places forever.
+ *
+ * ponytail: where midnight instead happens twice — a zone cutting its offset just after
+ * midnight, so the clock rewinds through it — this returns the second one, up to three
+ * hours late. It is still minute zero of the right day, and only `from` is affected
+ * (a late `to` only widens the window), so at worst the lead-in day loses shifts clocked
+ * in during the repeat. Last occurrences in the current tzdb: Asia/Amman and Asia/Gaza
+ * 2021, Antarctica/Casey and Antarctica/Vostok 2023. Upgrade path: replace both probes
+ * with a binary search over [utcMidnight - 26h, utcMidnight + 26h] for the first minute
+ * whose zoned day is `day` — exact for repeats too, at ~16 formatter calls instead of 2.
  */
 export function startOfDay(day: DayKey, tz: string): string {
   const [year, month, date] = day.split('-').map(Number);
   const utcMidnight = Date.UTC(year, month - 1, date);
   const guess = utcMidnight - offsetMinutes(utcMidnight, tz) * 60_000;
-  return new Date(utcMidnight - offsetMinutes(guess, tz) * 60_000).toISOString();
+  const corrected = utcMidnight - offsetMinutes(guess, tz) * 60_000;
+  const start =
+    zonedDate(new Date(corrected), tz).day === day ? corrected : Math.max(guess, corrected);
+
+  return new Date(start).toISOString();
 }
 
 export interface Segment {
@@ -234,9 +246,8 @@ export function layoutWeek(
 }
 
 /**
- * The height of one hour row. It lives here rather than in WeekCalendar because EntryBar
- * measures its bars against it, and importing it from WeekCalendar — which renders
- * EntryBar — would make the two modules cyclic.
+ * The height of one hour row. Both WeekCalendar and EntryBar measure against it and
+ * neither can own it: WeekCalendar renders EntryBar, so the import would only run one way.
  */
 export const ROW_HEIGHT = 'var(--spacing-12)';
 
