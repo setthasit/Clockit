@@ -22,7 +22,7 @@ Rules: no barrel files; components in `src/components` only when reused or >~80 
   - [ ] 2.2: Sign-in screen + auth gate
 - [ ] Task 3: API layer
   - [x] 3.1: `src/api/client.ts` fetch wrapper
-  - [ ] 3.2: Typed endpoints (`me.ts`, `entries.ts`)
+  - [x] 3.2: Typed endpoints (`me.ts`, `entries.ts`)
 - [ ] Task 4: Location helpers
   - [ ] 4.1: `src/location/fix.ts`
   - [ ] 4.2: Permissions explainer screen
@@ -176,6 +176,8 @@ Classifier constraints found while building 3.1 — the retry rule is `status ==
 - **429 must retry.** The backend rate-limits per `sub` per route path at 30/min (`RATE_LIMIT_PER_MIN`), and `/v1/entries/clock-in`, `/clock-out` and `/v1/pings` are all limited. A FIFO flush after a long offline shift bursts past that (pings cap at 64/batch), so treating 429 as permanent would drop real data and raise a spurious "needs attention". Do not remap 429 inside `api()` instead — task 6.4 maps `code` to user copy and would be corrupted.
 - **Make the classifier total, not a 4xx/5xx if-chain.** `api()` can throw `ApiError` with a 2xx status (a truncated 200 body → `ApiError(200, "UNKNOWN")`), which no 4xx/5xx branch covers. Dropping is correct there — the server returned 200, the write landed, and a retry would double the clock-in.
 - `ApiError(400, "CONFIG")` (missing `EXPO_PUBLIC_API_URL`) is deliberately non-retryable: `EXPO_PUBLIC_*` is inlined at build time, so a build missing it can never start working and would park the queue forever.
+
+A **clock-out** item must also carry the open entry's `client_id` (or entry `id`) alongside its own `clientId`. The server keeps the close idempotency key in a separate `close_client_id` field and never emits it, so `Entry.client_id` is always the *clock-in* id — matching `needsAttention[].clientId` against entry rows in 7.1 would silently never light the amber icon for a rejected clock-out, which is the case a user most needs to see.
 
 ### Task 6: Clock screen
 
