@@ -44,8 +44,8 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 6.1: `split.go` (largest-remainder split) + unit tests
   - [x] 6.2: Tips PUT/GET + report endpoint
   - [x] 6.3: Tests
-- [ ] Task 7: Custom telemetry
-  - [ ] 7.1: Domain counters + span attributes
+- [x] Task 7: Custom telemetry
+  - [x] 7.1: Domain counters + span attributes
 - [ ] Task 8: Seed command
   - [ ] 8.1: `cmd/seed/main.go`
 - [ ] Task 9: Verification
