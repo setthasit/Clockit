@@ -34,7 +34,7 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 4.1: `geo.go` (haversine + fix validation)
   - [x] 4.2: Geo unit tests
 - [ ] Task 5: Entry domain — endpoints
-  - [ ] 5.1: Clock-in
+  - [x] 5.1: Clock-in
   - [ ] 5.2: Clock-out
   - [ ] 5.3: List + assign-employer
   - [ ] 5.4: Pings (batch)
