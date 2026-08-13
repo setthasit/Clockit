@@ -108,15 +108,15 @@ func (h *Handler) List(c echo.Context) error {
 	return c.JSON(http.StatusOK, echo.Map{"tips": out})
 }
 
-// ponytail: no flags field, so a row can hold hours a `backdated` entry
-// asserted days late (design §4.5) and read as ordinary minutes. The report is
-// computed on read and the flag lives on the entry, so adding the field later
-// surfaces past shifts too — do it when the web report has somewhere to show it.
-//
 // reportRow is one member's day. hourly_rate_cents is null when the employer
 // never set a rate, and base_pay_cents is then null too — unknown pay, which the
 // table renders blank, not zero. The tip share is owed regardless: it comes from
 // minutes worked, not from a rate.
+//
+// ponytail: no flags field, so a row can hold hours a `backdated` entry
+// asserted days late (design §4.5) and read as ordinary minutes. The report is
+// computed on read and the flag lives on the entry, so adding the field later
+// surfaces past shifts too — do it when the web report has somewhere to show it.
 type reportRow struct {
 	User            employer.UserRef `json:"user"`
 	Minutes         int64            `json:"minutes"`
