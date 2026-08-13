@@ -1,3 +1,4 @@
+import * as Location from "expo-location";
 import { Stack } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -14,6 +15,8 @@ import { theme } from "@/lib/theme";
 // Importing auth0Config also arms the api() auth handlers (stores/session.ts registers them at
 // module scope), so no request can be issued before a token source exists.
 import { auth0Config, useSessionStore } from "@/stores/session";
+import { useUiStore } from "@/stores/ui";
+import Permissions from "./permissions";
 
 export default function RootLayout() {
   // Auth0Provider builds its client *during render* (hooks/Auth0Provider.tsx:56) and the Auth0
@@ -59,6 +62,11 @@ function Gate() {
   const { user, isLoading, clearCredentials, hasValidCredentials } = useAuth0();
   const me = useSessionStore((s) => s.me);
   const loadMe = useSessionStore((s) => s.loadMe);
+  // Reads the OS status on mount (createPermissionHook's `get` defaults to true) and stays null
+  // until that resolves. It never *requests* — only the button on the explainer does.
+  const [permission] = Location.useForegroundPermissions();
+  const uiHydrated = useUiStore((s) => s.hydrated);
+  const explainerSeen = useUiStore((s) => s.locationExplainerSeen);
   const [hasCreds, setHasCreds] = useState<boolean | null>(null);
   const [meError, setMeError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -118,6 +126,12 @@ function Gate() {
       });
   }, [signedIn, me, attempt, loadMe, clearCredentials]);
 
+  const spinner = (
+    <View style={styles.screen}>
+      <ActivityIndicator color={theme.surface} />
+    </View>
+  );
+
   // `!user && hasCreds === null` is the window where the keychain check is still in flight: without
   // it the gate would render sign-in for a frame before flipping back.
   if (
@@ -125,11 +139,7 @@ function Gate() {
     (!user && hasCreds === null) ||
     (signedIn && !me && !meError)
   ) {
-    return (
-      <View style={styles.screen}>
-        <ActivityIndicator color={theme.surface} />
-      </View>
-    );
+    return spinner;
   }
 
   if (signedIn && !me) {
@@ -149,6 +159,35 @@ function Gate() {
     );
   }
 
+  // Both of these are async and unresolved for the first frames of a signed-in launch: the OS
+  // permission read (null) and the AsyncStorage rehydration of `explainerSeen` (false until
+  // hydrated). Deciding before either lands would flash the explainer at someone who dismissed it
+  // three months ago. Kept as its own check rather than folded into the spinner above so a failed
+  // /me still reaches the Retry screen instead of hanging here.
+  if (signedIn && (!permission || !uiHydrated)) {
+    return spinner;
+  }
+
+  // The location half of the gate. Rendered directly rather than routed to, for the same reason
+  // the spinner and Retry screens above are: it sidesteps the declaration-order hazard documented
+  // below entirely, needs no navigator to exist yet, and leaves no history entry to swipe back
+  // into. Once the flag flips, this component simply stops being returned and the Stack mounts on
+  // its first screen, (tabs). /permissions stays a normal registered route, so task 8.1's profile
+  // screen can still link to it.
+  //
+  // UNDETERMINED is the only status worth interrupting a launch for: it is the one state where the
+  // OS will actually show a prompt. `granted` needs no pitch, and `denied` cannot be re-prompted
+  // from here at all — that user needs the Settings deep link the clock screen owns (task 6.1), so
+  // canAskAgain adds nothing to this condition. `explainerSeen` is what stops the loop: "Not now"
+  // leaves the status UNDETERMINED forever.
+  if (
+    signedIn &&
+    permission?.status === Location.PermissionStatus.UNDETERMINED &&
+    !explainerSeen
+  ) {
+    return <Permissions />;
+  }
+
   // Stack.Protected removes screens from the navigator instead of navigating away from them:
   // StackRouter.getStateForRouteNamesChange drops every route whose name is no longer registered
   // and re-seeds the stack with routeNames[0], so the screens on the wrong side of the guard leave
@@ -156,12 +195,8 @@ function Gate() {
   // The re-seeded route is routeNames[0], and getSortedChildren (expo-router useScreens.js) keeps
   // declaration order: the FIRST <Stack.Screen> in each branch below is that branch's landing
   // route. Do not reorder them — moving "permissions" above "(tabs)" would land every sign-in on
-  // the Location screen with no history entry to escape via.
-  //
-  // ponytail: auth half only. Task 4.2 adds the location branch here (session but the explainer
-  // was never seen → /permissions); it needs 4.2's persisted "explainer seen" flag, because a user
-  // who tapped "Not now" leaves the OS permission undetermined and a gate keyed on that alone
-  // would redirect them forever.
+  // the Location screen with no history entry to escape via. The location branch above deliberately
+  // does not touch this block for that reason.
   return (
     <Stack>
       <Stack.Protected guard={signedIn}>
