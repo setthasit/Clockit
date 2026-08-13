@@ -6,9 +6,10 @@ import type {Fix, LatLng} from '@/api/types';
 // from the server promises "in range" and then gets an OUT_OF_RANGE rejection.
 const EARTH_RADIUS_M = 6371000;
 
-// ponytail: the server's radius is configurable (ANCHOR_RADIUS_M, default 1000) but is not
-// on the wire, so this copy is the default. Ceiling: an employer with a custom radius gets a
-// wrong badge (the server still decides). Upgrade: return it on /v1/me's employer and use it.
+// ponytail: this is the default of the one deployment-wide ANCHOR_RADIUS_M (config.go) — an
+// employer has no radius of its own. Ceiling: change that env var and every client badge is
+// wrong until an app release ships (the server still decides). Upgrade: the rejection already
+// carries the real limit in OUT_OF_RANGE.details.limit_m, so learn it from a refusal.
 const ANCHOR_RADIUS_M = 1000;
 
 // coords.accuracy is null when the platform reports no uncertainty radius. 9999 is not
@@ -22,15 +23,20 @@ const FIX_TIMEOUT_MS = 15_000;
 
 /**
  * Deliberately not an ApiError: nothing here came from the server, and the outbox's retry rule
- * reads ApiError.status. `code` matches how the clock screen already maps errors to user copy.
+ * reads ApiError.status. `code` is for the caller to branch on without matching copy — the two
+ * cases want different affordances (deep-link to Settings vs retry), which the clock screen
+ * will decide; the server error map has no location entries.
  */
 export class LocationError extends Error {
   code: 'LOCATION_UNAVAILABLE' | 'LOCATION_TIMEOUT';
 
-  constructor(code: LocationError['code'], message: string) {
+  constructor(code: LocationError['code'], message: string, cause?: unknown) {
     super(message);
     this.name = 'LocationError';
     this.code = code;
+    // Assigned rather than passed to super: Hermes documents everything post-ES6 outside its
+    // supported list as excluded, and error cause is ES2022, so the option can be dropped.
+    this.cause = cause;
   }
 }
 
@@ -52,9 +58,16 @@ export async function getFix(): Promise<Fix> {
 
   try {
     // ponytail: losing the race only rejects — the native request runs on, and there is no
-    // coarser fallback fix. Add getLastKnownPositionAsync if timeouts turn out to be common.
+    // coarser fallback fix. Add getLastKnownPositionAsync if timeouts turn out to be common,
+    // with a maxAge well under the server's MAX_CLOCK_SKEW (5m): its timestamp is when the fix
+    // was taken and lands in `at`, so an older one comes back STALE_TIMESTAMP.
     const p = await Promise.race([
-      Location.getCurrentPositionAsync({accuracy: Location.Accuracy.Highest}),
+      Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+        // Android otherwise opens a system settings dialog and waits for the user before it
+        // even asks for a location, putting reading time inside the 15 s below.
+        mayShowUserSettingsDialog: false,
+      }),
       timeout,
     ]);
     return {
@@ -68,11 +81,14 @@ export async function getFix(): Promise<Fix> {
     };
   } catch (e) {
     if (e instanceof LocationError) throw e;
-    // Permission denied and location services off both reject here with platform-specific
-    // native messages; neither is showable copy, and both need the same thing from the user.
+    // Permission denied, location services off, and — on iOS, where requestLocation() fails
+    // fast instead of hanging until the timeout — simply not getting a fix indoors all reject
+    // here with native messages that are not showable copy, so one message covers all three.
+    // The original rides along as `cause` for logs; only `message` is rendered.
     throw new LocationError(
       'LOCATION_UNAVAILABLE',
-      'Location is unavailable. Check that location services and permission are on.',
+      'Could not get your location. Check that location services and permission are on, and try moving outside or near a window.',
+      e,
     );
   } finally {
     clearTimeout(timer);

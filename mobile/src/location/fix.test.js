@@ -13,8 +13,9 @@ const src = new URL('../', import.meta.url);
 const EXPO_LOCATION_STUB = 'stub:expo-location';
 
 // fix.ts imports expo-location for getFix(), and that package pulls in react-native, which bare
-// Node cannot parse. getFix() needs a device and is not tested here, so the specifier is
-// redirected to a stub — no test below reaches the native module.
+// Node cannot parse. The specifier is redirected to a stub whose getCurrentPositionAsync each
+// test sets, which covers getFix()'s mapping without a device — the native call itself, the
+// permission prompt and the timeout duration stay unverified here.
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier === 'expo-location') return {url: EXPO_LOCATION_STUB, shortCircuit: true};
@@ -25,11 +26,21 @@ registerHooks({
   },
   load(url, context, next) {
     if (url !== EXPO_LOCATION_STUB) return next(url, context);
-    return {format: 'module', shortCircuit: true, source: 'export const Accuracy = {};'};
+    return {
+      format: 'module',
+      shortCircuit: true,
+      source: `
+        export const Accuracy = {};
+        export let next;
+        export function setNext(fn) { next = fn; }
+        export function getCurrentPositionAsync(options) { return next(options); }
+      `,
+    };
   },
 });
 
-const {distanceM, inRange} = await import('@/location/fix');
+const {distanceM, getFix, inRange, LocationError} = await import('@/location/fix');
+const {setNext} = await import(EXPO_LOCATION_STUB);
 
 // Sub-millimetre: the two implementations are the same expression over the same doubles, so
 // anything looser would hide a real divergence (a different radius, a dropped clamp).
@@ -81,4 +92,52 @@ test('inRange rounds to whole metres, like the server', () => {
   assert.equal(inRange({lat: 13.7563, lng: 100.5018 + 0.0092653}, BKK), false);
   assert.equal(inRange(BKK, BKK), true);
   assert.equal(inRange({lat: 13.765, lng: 100.538}, BKK), false);
+});
+
+// Both platforms report milliseconds since the epoch (ios/LocationUtils.swift multiplies the
+// CLLocation interval by 1000, Android passes location.time), so `at` is a plain Date away.
+test('getFix maps a native reading onto the wire shape', async () => {
+  setNext(async () => ({
+    coords: {latitude: 13.7563, longitude: 100.5018, accuracy: 4.5},
+    timestamp: 1700000000000,
+    mocked: true,
+  }));
+  assert.deepEqual(await getFix(), {
+    lat: 13.7563,
+    lng: 100.5018,
+    accuracy: 4.5,
+    at: '2023-11-14T22:13:20.000Z',
+    mocked: true,
+  });
+});
+
+// A null accuracy (platform reports no uncertainty radius) and an absent mocked flag (iOS) must
+// fall back to values the server refuses or distrusts, never to ones that read as precise/clean.
+test('getFix falls back when the platform omits accuracy and mocked', async () => {
+  setNext(async () => ({
+    coords: {latitude: 13.7563, longitude: 100.5018, accuracy: null},
+    timestamp: 1700000000000,
+  }));
+  const fix = await getFix();
+  assert.equal(fix.accuracy, 9999);
+  assert.equal(fix.mocked, false);
+});
+
+const NATIVE_DETAIL = 'kCLErrorDomain SECRET';
+
+test('a native failure becomes LOCATION_UNAVAILABLE with no native detail in the message', async () => {
+  const native = new Error(NATIVE_DETAIL);
+  setNext(async () => {
+    throw native;
+  });
+  const e = await getFix().then(
+    () => assert.fail('expected getFix to reject'),
+    (err) => err,
+  );
+  assert.ok(e instanceof LocationError, `expected a LocationError, got ${e.name}`);
+  assert.equal(e.code, 'LOCATION_UNAVAILABLE');
+  assert.ok(!e.message.includes('SECRET'), `leaked native detail: ${e.message}`);
+  // The guarantee above is about message, the only part rendered to the user; cause keeps the
+  // native error reachable for logs, since this path is otherwise unverifiable off-device.
+  assert.equal(e.cause, native);
 });
