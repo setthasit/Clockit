@@ -15,8 +15,8 @@ Rules: no barrel files; components in `src/components` only when reused or >~80 
 ## Tasks
 
 - [ ] Task 1: Project scaffold
-  - [ ] 1.1: create-expo-app + @expo/ui + theme
-  - [ ] 1.2: expo-router skeleton + app.json config
+  - [x] 1.1: create-expo-app + @expo/ui + theme
+  - [x] 1.2: expo-router skeleton + app.json config
 - [ ] Task 2: Auth
   - [ ] 2.1: Auth0 provider + session store
   - [ ] 2.2: Sign-in screen + auth gate
@@ -61,7 +61,7 @@ Custom views style with plain `StyleSheet` + these tokens. Expo UI components ta
 
 #### 1.2: Router + config
 
-**Files**: `mobile/app/_layout.tsx`, `mobile/app/sign-in.tsx`, `mobile/app/permissions.tsx`, `mobile/app/(tabs)/_layout.tsx`, `mobile/app/(tabs)/index.tsx`, `mobile/app/(tabs)/history.tsx`, `mobile/app/(tabs)/profile.tsx`, `mobile/app/entry/[id].tsx`
+**Files**: `mobile/src/app/_layout.tsx`, `mobile/src/app/sign-in.tsx`, `mobile/src/app/permissions.tsx`, `mobile/src/app/(tabs)/_layout.tsx`, `mobile/src/app/(tabs)/index.tsx`, `mobile/src/app/(tabs)/history.tsx`, `mobile/src/app/(tabs)/profile.tsx`, `mobile/src/app/entry/[id].tsx`
 
 `_layout.tsx`: providers (Auth0Provider) + auth gate: no session → redirect `/sign-in`; session but foreground location permission undecided → `/permissions`. Tabs: Clock (default), History, Profile.
 
@@ -87,7 +87,7 @@ Zustand, not persisted (tokens live in the Auth0 SDK's keychain storage; `me` re
 
 #### 2.2: Sign-in
 
-**File**: `mobile/app/sign-in.tsx`
+**File**: `mobile/src/app/sign-in.tsx`
 
 Brand-blue screen, logo, one primary button "Sign in" → `authorize({ audience: EXPO_PUBLIC_AUTH0_AUDIENCE, scope: "openid profile email offline_access" })` (Universal Login shows Google/Apple/Facebook/password — zero in-app credential UI). On success: set token, `loadMe()`, router replace `/(tabs)`. Error → inline message + retry.
 
@@ -130,7 +130,7 @@ export function distanceM(a: LatLng, b: LatLng): number // haversine, mirrors ba
 
 #### 4.2: Permissions explainer
 
-**File**: `mobile/app/permissions.tsx`
+**File**: `mobile/src/app/permissions.tsx`
 
 Friendly pre-prompt screen (design §5.2): icon, "ClockIt checks you're at the right place only when you clock in/out, and records your location during shifts." Buttons: "Continue" → `Location.requestForegroundPermissionsAsync()` → route to tabs (background permission is requested in phase 5 at first clock-in, not here — ask only when needed); "Not now" → tabs with clock disabled state. Persist that the explainer was seen (zustand persist, `ui` slice in session store).
 
@@ -173,7 +173,7 @@ Persisted via `persist` + AsyncStorage (whole store). Flush is serialized (guard
 
 ### Task 6: Clock screen
 
-**File**: `mobile/app/(tabs)/index.tsx` (+ `mobile/src/components/ClockButton.tsx`, `DistanceBadge.tsx`, `EmployerSheet.tsx`)
+**File**: `mobile/src/app/(tabs)/index.tsx` (+ `mobile/src/components/ClockButton.tsx`, `DistanceBadge.tsx`, `EmployerSheet.tsx`)
 
 #### 6.1: Status card + button
 
@@ -205,25 +205,25 @@ Error map (code → copy): `MOCKED_LOCATION` "Mock location detected — disable
 
 #### 7.1: History tab
 
-**File**: `mobile/app/(tabs)/history.tsx`
+**File**: `mobile/src/app/(tabs)/history.tsx`
 
 `listEntries(last 30 days)` + pull-to-refresh (`FlatList` + `RefreshControl`, sections by `dayKey`). Row (`src/components/EntryRow.tsx`): employer chip (brand outline; gray "Personal"), `9:02 – 17:35`, duration, open entry → pulsing "on shift", `needsAttention` match → amber warning icon. Top banner when `outbox.items.length > 0`: "N actions waiting to sync". Rows are custom RN (chips/pulse don't map to Expo UI `List`); use Expo UI only if a universal component fits without fighting it.
 
 #### 7.2: Detail + assign
 
-**File**: `mobile/app/entry/[id].tsx`
+**File**: `mobile/src/app/entry/[id].tsx`
 
 Times, duration, employer, `location_verified` badge (green "Location verified" / amber "Not verified"), flags list. Personal entries: "Assign employer" → `Picker` from `@expo/ui/universal` (active memberships) → `assignEmployer` → refetch → toast; explain resulting badge if unverified ("Outside Acme's zone at clock-in time").
 
 ### Task 8: Profile
 
-**File**: `mobile/app/(tabs)/profile.tsx`
+**File**: `mobile/src/app/(tabs)/profile.tsx`
 
 Name (editable → `patchMe`), email (read-only), memberships list ("Added by Acme Cafe · active"), app version, "Sign out" → Auth0 `clearSession()` + wipe all stores (session/clock/outbox — warn if outbox non-empty: "N unsynced actions will be lost"). Settings-style layout via `@expo/ui/universal` (`FieldGroup`/`List` rows, `TextInput` for name); sign-in screen, ClockButton, DistanceBadge stay custom RN + StyleSheet.
 
 ### Task 9: Outbox sync triggers
 
-**File**: `mobile/src/stores/outbox.ts` (+ wiring in `app/_layout.tsx`)
+**File**: `mobile/src/stores/outbox.ts` (+ wiring in `src/app/_layout.tsx`)
 
 Flush on: NetInfo `isConnected` transition to true, AppState → `active`, successful launch after `loadMe()`. After any flush that contained clock items → `clock.hydrateFromServer()` to reconcile.
 
@@ -237,3 +237,8 @@ Flush on: NetInfo `isConnected` transition to true, AppState → `active`, succe
 - [ ] 10.6: Assign employer on a personal entry → badge reflects verification.
 - [ ] 10.7: Sign out clears everything; relaunch requires sign-in.
 - [ ] 10.8: `npx tsc --noEmit` and `npx expo-doctor` clean; iOS + Android dev builds run.
+
+### Phase completion notes (deviations from plan)
+
+- 1.2: config lives in `app.config.ts` (TS), not `app.json` — the plan's env-var requirement needs `process.env`. No `extra` block: `EXPO_PUBLIC_*` vars are inlined at build time, so reading them directly beats an `extra` + `Constants.expoConfig.extra` indirection hop. `expo-location` plugin also needs `locationAlwaysPermission` (background is enabled, and App Review reads `NSLocationAlwaysUsageDescription`, which otherwise gets a generic auto-string) and `motionUsagePermission: false` (the plugin writes `NSMotionUsageDescription` unconditionally for an API ClockIt never calls). `userInterfaceStyle: "light"` — the theme is a single light palette, so `automatic` would render dark `@expo/ui`/native chrome over light screens. `expo-task-manager` installed now, not in phase 5: it is not a transitive dep of `expo-location`, and `startLocationUpdatesAsync` needs it — adding it later would force the native rebuild the pre-landed background keys exist to avoid. Auth0Provider + auth gate deferred to task 2 (they need the session store). CI/EAS must inject `EXPO_PUBLIC_AUTH0_DOMAIN`; without it the `react-native-auth0` plugin aborts prebuild.
+- 1.1: SDK 57 default template is **src-based** — router root is `mobile/src/app/`, not `mobile/app/` (Expo: "only the `src/app` directory will be used if you have both", so root-level `app/` files would silently never load). All file paths above rewritten accordingly; `docs/design.md` §5.1's tree still shows the root-level form. `@expo/ui` ships with the template, so `expo install @expo/ui` was a no-op (`expo install --check` used to confirm). Versions: Expo SDK 57.0.12, `@expo/ui` 57.0.10, expo-router 57.0.12, RN 0.86.2, TS ~6.0.3.
