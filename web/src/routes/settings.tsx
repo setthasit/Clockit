@@ -4,7 +4,7 @@ import {Heading, Text} from '@astryxdesign/core/Text';
 
 export function SettingsRoute() {
   return (
-    <Section padding={4}>
+    <Section>
       <VStack gap={2}>
         <Heading level={1}>Settings</Heading>
         <Text type="body" color="secondary">

@@ -4,7 +4,7 @@ import {Heading, Text} from '@astryxdesign/core/Text';
 
 export function CalendarRoute() {
   return (
-    <Section padding={4}>
+    <Section>
       <VStack gap={2}>
         <Heading level={1}>Calendar</Heading>
         <Text type="body" color="secondary">

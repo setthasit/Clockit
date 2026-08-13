@@ -4,7 +4,7 @@ import {Heading, Text} from '@astryxdesign/core/Text';
 
 export function SignInRoute() {
   return (
-    <Section padding={4}>
+    <Section>
       <VStack gap={2}>
         <Heading level={1}>Sign in</Heading>
         <Text type="body" color="secondary">

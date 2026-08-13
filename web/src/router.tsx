@@ -18,6 +18,8 @@ export const router = createBrowserRouter([
       {path: '/table', element: <TableRoute />},
       {path: '/employees', element: <EmployeesRoute />},
       {path: '/settings', element: <SettingsRoute />},
+      // Prod LB rewrites unknown paths to index.html, so typo'd deep links land here.
+      {path: '*', element: <Navigate to="/calendar" replace />},
     ],
   },
 ]);
