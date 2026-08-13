@@ -20,3 +20,18 @@ export function useEmployer(): EmployerState {
   if (!state) throw new Error('useEmployer() must be called inside GuardedLayout');
   return state;
 }
+
+/**
+ * The active employer, non-null. Valid only under <Shell/>: GuardedLayout redirects to
+ * /onboarding while the list is empty, so by the time Shell renders there is at least one
+ * employer and the `?? employers[0]` fallback always resolves.
+ *
+ * Use this instead of useEmployer() in Shell routes. Every date in this app is formatted
+ * in the employer's IANA timezone, and an `employer?.timezone ?? browserTimezone` fallback
+ * would silently render another timezone's days rather than fail.
+ */
+export function useActiveEmployer(): Employer {
+  const {employer} = useEmployer();
+  if (!employer) throw new Error('useActiveEmployer() is only valid inside Shell');
+  return employer;
+}

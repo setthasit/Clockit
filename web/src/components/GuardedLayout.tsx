@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useMemo, useState} from 'react';
 import {Navigate, Outlet, useLocation} from 'react-router';
 import {useAuth0} from '@auth0/auth0-react';
 import {Banner} from '@astryxdesign/core/Banner';
@@ -6,8 +6,24 @@ import {Button} from '@astryxdesign/core/Button';
 import {Center} from '@astryxdesign/core/Center';
 import {Spinner} from '@astryxdesign/core/Spinner';
 import {api, setApiAuth} from '../lib/api';
-import {EMPLOYER_ID_KEY, EmployerContext} from '../lib/employer';
+import {EMPLOYER_ID_KEY, EmployerContext, type EmployerState} from '../lib/employer';
 import type {Employer} from '../lib/types';
+
+// Stable empty list for the loading and error states, so the context memo below does not
+// rebuild on every render while the fetch is in flight.
+const NO_EMPLOYERS: Employer[] = [];
+
+// Merely touching window.localStorage throws SecurityError where storage is blocked
+// (Chrome with all cookies blocked, some embedded webviews). Auth0 runs with
+// cacheLocation="memory", so failing soft here keeps the app fully usable — the employer
+// choice just does not survive a reload.
+function readStoredEmployerId(): string | null {
+  try {
+    return localStorage.getItem(EMPLOYER_ID_KEY);
+  } catch {
+    return null;
+  }
+}
 
 // ponytail: this doubles as the ApiProvider and the EmployerContext provider — every
 // authenticated request is issued under this layout and the employer list is already
@@ -15,12 +31,12 @@ import type {Employer} from '../lib/types';
 export function GuardedLayout() {
   const {isLoading, isAuthenticated, getAccessTokenSilently, loginWithRedirect} = useAuth0();
 
-  // Set during render, not in an effect: it must be in place before this component's
-  // own fetch effect below. No child can beat it today (<Outlet/> is unreachable until
-  // that fetch resolves), but once task 3.1 lifts `employers` into EmployerContext a
-  // child may mount in the same first commit, and child effects run before the parent's.
-  // api() fails closed, so getting this wrong throws loudly instead of sending an
-  // unauthenticated request.
+  // Set during render, not in an effect: it must be in place before this component's own
+  // fetch effect below, which is the first api() call of the session. It also covers the
+  // hypothetical case of a child mounting in the same commit — child effects run before
+  // the parent's — though no child can do that today, since <Outlet/> sits behind every
+  // early return until that fetch resolves. api() fails closed, so getting this wrong
+  // throws loudly instead of sending an unauthenticated request.
   setApiAuth({
     getToken: () => getAccessTokenSilently(),
     onUnauthorized: () => void loginWithRedirect(),
@@ -28,20 +44,28 @@ export function GuardedLayout() {
 
   const [employers, setEmployers] = useState<Employer[] | 'error' | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [selectedId, setSelectedId] = useState(() => localStorage.getItem(EMPLOYER_ID_KEY));
+  const [selectedId, setSelectedId] = useState(readStoredEmployerId);
   const {pathname, search} = useLocation();
 
   // Serves both the error Banner's Retry and EmployerContext.refresh(): re-running the
   // fetch is the only way a just-created employer reaches the rest of the app.
-  const refresh = () => {
-    setEmployers(null);
+  // The two states differ on purpose: refresh() is called from a child inside <Outlet/>,
+  // so clearing the list would unmount the very component that called it (and flash a
+  // whole-app spinner on every mutation). From 'error' there is nothing on screen worth
+  // keeping and Retry does want the spinner back.
+  const refresh = useCallback(() => {
+    setEmployers((prev) => (prev === 'error' ? null : prev));
     setAttempt((n) => n + 1);
-  };
+  }, []);
 
-  const setEmployerId = (id: string) => {
-    localStorage.setItem(EMPLOYER_ID_KEY, id);
+  const setEmployerId = useCallback((id: string) => {
+    try {
+      localStorage.setItem(EMPLOYER_ID_KEY, id);
+    } catch {
+      // Blocked storage: the selection below still applies for this session.
+    }
     setSelectedId(id);
-  };
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -60,6 +84,25 @@ export function GuardedLayout() {
       cancelled = true;
     };
   }, [isAuthenticated, attempt]);
+
+  // Above the early returns to keep hook order stable. Memoised because refresh() is the
+  // kind of value a child drops into a useEffect dep array, where a new identity on every
+  // navigation (this component calls useLocation()) would loop.
+  const employerList = employers === null || employers === 'error' ? NO_EMPLOYERS : employers;
+  const value = useMemo<EmployerState>(
+    () => ({
+      employers: employerList,
+      // Fall back to the first employer: a stored id can name one that was deleted or
+      // belongs to another account, and stranding the user on nothing is worse than a
+      // switch. The stale id is never rewritten, so that fallback simply resolves the
+      // same way on every load until the user picks someone — deterministic, and cheaper
+      // than a write-back effect.
+      employer: employerList.find((e) => e.id === selectedId) ?? employerList[0] ?? null,
+      setEmployerId,
+      refresh,
+    }),
+    [employerList, selectedId, setEmployerId, refresh],
+  );
 
   if (isLoading) {
     return (
@@ -103,12 +146,8 @@ export function GuardedLayout() {
     return <Navigate to="/onboarding" replace />;
   }
 
-  // Fall back to the first employer: a stored id can name one that was deleted or
-  // belongs to another account, and stranding the user on nothing is worse than a switch.
-  const employer = employers.find((e) => e.id === selectedId) ?? employers[0] ?? null;
-
   return (
-    <EmployerContext value={{employers, employer, setEmployerId, refresh}}>
+    <EmployerContext value={value}>
       <Outlet />
     </EmployerContext>
   );

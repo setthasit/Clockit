@@ -1,14 +1,14 @@
 import type {AnchorHTMLAttributes} from 'react';
-import {Link, Outlet, useLocation, useNavigate} from 'react-router';
+import {Link, Outlet, useLocation} from 'react-router';
 import {useAuth0} from '@auth0/auth0-react';
 import {AppShell} from '@astryxdesign/core/AppShell';
+import {Avatar} from '@astryxdesign/core/Avatar';
 import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
-import {HStack} from '@astryxdesign/core/Layout';
 import {LinkProvider} from '@astryxdesign/core/Link';
-import {Selector} from '@astryxdesign/core/Selector';
+import {NavHeadingMenu, NavHeadingMenuItem} from '@astryxdesign/core/NavMenu';
 import {SideNav, SideNavItem, SideNavSection} from '@astryxdesign/core/SideNav';
 import {TopNav, TopNavHeading} from '@astryxdesign/core/TopNav';
-import {useEmployer} from '../lib/employer';
+import {useActiveEmployer, useEmployer} from '../lib/employer';
 
 const NAV_ITEMS = [
   {label: 'Calendar', href: '/calendar'},
@@ -16,9 +16,6 @@ const NAV_ITEMS = [
   {label: 'Employees', href: '/employees'},
   {label: 'Settings', href: '/settings'},
 ];
-
-// Employer ids are UUIDs, so this can never collide with a real option value.
-const NEW_EMPLOYER = 'new-employer';
 
 // Astryx renders every href through the LinkProvider component, so this one adapter
 // keeps the whole shell on client-side navigation.
@@ -30,9 +27,9 @@ function RouterLink({href, ...props}: AnchorHTMLAttributes<HTMLAnchorElement>) {
  * component it wraps already owns that name. */
 export function Shell() {
   const {pathname} = useLocation();
-  const navigate = useNavigate();
   const {user, logout} = useAuth0();
-  const {employers, employer, setEmployerId} = useEmployer();
+  const {employers, setEmployerId} = useEmployer();
+  const employer = useActiveEmployer();
 
   return (
     <LinkProvider component={RouterLink}>
@@ -40,42 +37,54 @@ export function Shell() {
         contentPadding={4}
         topNav={
           <TopNav
-            heading={<TopNavHeading heading="ClockIt" headingHref="/calendar" />}
+            heading={
+              // The heading menu is Astryx's documented product-switcher pattern; a
+              // Selector would announce "New employer" as a selectable value in a listbox
+              // rather than the link it is. Shown at any employer count, so a single
+              // employer account can still reach /onboarding.
+              <TopNavHeading
+                heading="ClockIt"
+                headingHref="/calendar"
+                subheading={employer.name}
+                menu={
+                  <NavHeadingMenu>
+                    {employers.map((e) => (
+                      <NavHeadingMenuItem
+                        key={e.id}
+                        label={e.name}
+                        onClick={() => setEmployerId(e.id)}
+                      />
+                    ))}
+                    <NavHeadingMenuItem label="New employer" href="/onboarding" />
+                  </NavHeadingMenu>
+                }
+              />
+            }
             endContent={
-              <HStack gap={2} vAlign="center">
-                {/* ponytail: a lone employer has nothing to switch to, so the switcher —
-                    and with it the only link to /onboarding — is hidden, per plan §3.1.
-                    Task 6 can put a "New employer" action in Settings if it is wanted. */}
-                {employers.length > 1 && (
-                  <Selector
-                    label="Employer"
-                    isLabelHidden
-                    variant="ghost"
-                    value={employer?.id}
-                    options={[
-                      ...employers.map((e) => ({value: e.id, label: e.name})),
-                      {type: 'divider' as const},
-                      {value: NEW_EMPLOYER, label: 'New employer'},
-                    ]}
-                    onChange={(value) => {
-                      // Never stored as the active employer: it is an action, not a value.
-                      if (value === NEW_EMPLOYER) void navigate('/onboarding');
-                      else setEmployerId(value);
-                    }}
-                  />
-                )}
-                <DropdownMenu
-                  button={{label: user?.email ?? 'Account', variant: 'ghost'}}
-                  alignment="end"
-                  items={[
-                    {
-                      label: 'Sign out',
-                      onClick: () =>
-                        logout({logoutParams: {returnTo: window.location.origin}}),
-                    },
-                  ]}
-                />
-              </HStack>
+              <DropdownMenu
+                button={{
+                  label: user?.email ?? 'Account',
+                  variant: 'ghost',
+                  icon: (
+                    // tooltip={false}: the button's own label already names the account,
+                    // and the avatar's default tooltip would cover the open menu.
+                    <Avatar
+                      src={user?.picture}
+                      name={user?.name ?? user?.email}
+                      size="sm"
+                      tooltip={false}
+                    />
+                  ),
+                }}
+                alignment="end"
+                items={[
+                  {
+                    label: 'Sign out',
+                    onClick: () =>
+                      logout({logoutParams: {returnTo: window.location.origin}}),
+                  },
+                ]}
+              />
             }
           />
         }
