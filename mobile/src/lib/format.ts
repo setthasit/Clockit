@@ -21,6 +21,10 @@ export function formatDistance(meters: number): string {
 
 // Local calendar day, not UTC: a 23:30 shift must group under the day the
 // employee worked it, which toISOString() would push to tomorrow.
+// ponytail: groups by *device* timezone, but design §11 makes the employer
+// timezone authoritative — an employee travelling across zones sees shifts on
+// the wrong day. Upgrade: take the employer IANA tz and format with
+// Intl.DateTimeFormat({ timeZone }) when history can span timezones.
 export function dayKey(dt: string | Date): string {
   const d = toDate(dt);
   const pad = (n: number) => String(n).padStart(2, "0");
