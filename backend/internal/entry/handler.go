@@ -298,6 +298,12 @@ func (h *Handler) Assign(c echo.Context) error {
 	if e.EmployerID != nil {
 		return httpx.Invalid("entry already has an employer")
 	}
+	// Assignment is one-way and records a shift that already happened (§4.5.5).
+	// On an open entry it would re-point the clock-out at the employer's anchor,
+	// so a personal shift started out of zone could never be closed.
+	if e.Status != statusClosed {
+		return httpx.Invalid("only a closed entry can be assigned")
+	}
 
 	anchor, err := h.anchor(ctx, employerID, u.ID)
 	if err != nil {
@@ -322,8 +328,9 @@ func (h *Handler) Assign(c echo.Context) error {
 // Position only: mock, accuracy and skew were judged when the fix was captured,
 // and re-judging skew now would mark every past entry unverified.
 //
-// An open entry has only a clock-in to measure; its eventual clock-out is
-// validated against this same anchor, because employer_id is set by then.
+// Callers only assign closed entries, so both fixes are normally present; the
+// nil clock-out stays handled so bad data measures the clock-in alone rather
+// than panicking.
 func (h *Handler) withinAnchor(ctx context.Context, u *user.User, e *Entry, anchor employer.LatLng) (bool, error) {
 	points := []*ClockPoint{&e.ClockIn}
 	if e.ClockOut != nil {
