@@ -35,9 +35,13 @@ export const useUiStore = create<UiState>()(
     {
       name: 'clockit-ui',
       storage: createJSONStorage(() => AsyncStorage),
+      // `hydrated` is kept out of what gets written, not out of writing: setState() below still
+      // goes through persist's wrapped api.setState, so every cold launch rewrites the same
+      // `locationExplainerSeen` payload once. One small write, not worth avoiding.
       partialize: ({locationExplainerSeen}) => ({locationExplainerSeen}),
-      // Runs after rehydration *and* after a read error; unconditional so a corrupt or unreadable
-      // store leaves the user on the defaults rather than on the gate's spinner forever.
+      // Runs after rehydration *and* after a read error (persist calls it with the error instead of
+      // the state); unconditional so a corrupt or unreadable store leaves the user on the defaults
+      // rather than on the gate's spinner forever. ui.test.js pins both failure paths.
       onRehydrateStorage: () => () => useUiStore.setState({hydrated: true}),
     },
   ),

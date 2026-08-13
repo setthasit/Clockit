@@ -2,7 +2,8 @@ import * as Location from "expo-location";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { theme } from "@/lib/theme";
 import { useUiStore } from "@/stores/ui";
@@ -22,8 +23,14 @@ import { useUiStore } from "@/stores/ui";
  */
 export default function Permissions() {
   const markSeen = useUiStore((s) => s.markLocationExplainerSeen);
+  const insets = useSafeAreaInsets();
   const [asking, setAsking] = useState(false);
 
+  // ponytail: dismissing is a one-way door. "Not now" leaves the OS status UNDETERMINED and flips
+  // the flag, and no shipped screen links to /permissions yet, so that user has no way back to the
+  // pitch — nor to iOS Settings, which shows no Location row for an app that never requested.
+  // Ceiling: a worker who taps "Not now" cannot clock in until reinstall. Upgrade path: task 6.1's
+  // disabled-clock state (which owns the Settings deep link) and task 8.1's profile link here.
   const dismiss = () => {
     markSeen();
     // canGoBack() answers false when no navigator has mounted yet (expo-router
@@ -39,19 +46,39 @@ export default function Permissions() {
       // The answer is deliberately not branched on: both outcomes leave the app usable, and the
       // clock screen (task 6.1) reads the live status itself rather than trusting a stored copy.
       await Location.requestForegroundPermissionsAsync();
-    } finally {
-      dismiss();
+    } catch {
+      // A throw means no prompt was ever shown (missing native module, or a web build). Dismissing
+      // here would retire this screen for good — see the one-way door above — for someone who was
+      // never actually asked, so stay put and re-enable the buttons instead.
+      setAsking(false);
+      return;
     }
+    dismiss();
   };
 
   return (
-    <View style={styles.screen}>
-      <View style={styles.body}>
-        <SymbolView
-          name={{ ios: "location.circle.fill", android: "location_on" }}
-          size={72}
-          tintColor={theme.brand}
-        />
+    <View
+      style={[
+        styles.screen,
+        {
+          paddingTop: insets.top + theme.spacing.l,
+          paddingBottom: insets.bottom + theme.spacing.l,
+        },
+      ]}
+    >
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
+        {/* Decorative: SymbolView forwards no a11y props, and on Android it renders a bare <Text>
+            glyph that TalkBack would otherwise stop on and read as a character. */}
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          <SymbolView
+            name={{ ios: "location.circle.fill", android: "location_on" }}
+            size={72}
+            tintColor={theme.brand}
+          />
+        </View>
         <Text accessibilityRole="header" style={styles.title}>
           Why ClockIt needs your location
         </Text>
@@ -70,10 +97,11 @@ export default function Permissions() {
           off shift, ClockIt does not look.
         </Text>
         <Text style={styles.note}>
-          Next you&apos;ll see your phone&apos;s own permission prompt. We ask
-          for background location later, only if you start a shift.
+          Tap Continue and you&apos;ll see your phone&apos;s own permission
+          prompt. We ask for background location later, only if you start a
+          shift.
         </Text>
-      </View>
+      </ScrollView>
 
       <Pressable
         accessibilityRole="button"
@@ -99,16 +127,21 @@ export default function Permissions() {
 }
 
 const styles = StyleSheet.create({
-  // paddingBottom is generous rather than inset-aware: as a gate short-circuit this screen renders
-  // with no header and no tab bar, and 40pt clears the iOS home indicator without a hook.
+  // Insets are applied inline, not baked in here: as a gate short-circuit this screen renders with
+  // no header and no tab bar, so both the status bar and the home indicator are its own problem.
+  // useSafeAreaInsets() works even under the gate — expo-router's ExpoRoot mounts a
+  // SafeAreaProvider (with initialMetrics) around the entire tree, above the root layout.
   screen: {
     flex: 1,
-    justifyContent: "center",
     backgroundColor: theme.surface,
-    padding: theme.spacing.l,
-    paddingBottom: 40,
+    paddingHorizontal: theme.spacing.l,
   },
-  body: { flex: 1, justifyContent: "center", gap: theme.spacing.m },
+  // A ScrollView only scrolls when its own height is bounded; without flex it would size to its
+  // content and overflow the screen exactly like the View it replaced.
+  scroll: { flex: 1 },
+  // The copy is long and grows with Dynamic Type: a plain View would clip it, since RN does not
+  // scroll overflow. flexGrow keeps it optically centred until it no longer fits, then it scrolls.
+  body: { flexGrow: 1, justifyContent: "center", gap: theme.spacing.m },
   title: { color: theme.text, fontSize: 24, fontWeight: "700" },
   lead: { color: theme.text, fontSize: 16, lineHeight: 22 },
   point: { color: theme.muted, fontSize: 15, lineHeight: 21 },

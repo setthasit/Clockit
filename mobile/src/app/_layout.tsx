@@ -64,6 +64,10 @@ function Gate() {
   const loadMe = useSessionStore((s) => s.loadMe);
   // Reads the OS status on mount (createPermissionHook's `get` defaults to true) and stays null
   // until that resolves. It never *requests* — only the button on the explainer does.
+  // It is a launch-time snapshot and nothing else: permissions.tsx calls the *module* function
+  // rather than this hook's requester, so the hook's setStatus never fires, and there is no
+  // foreground listener re-reading it. Harmless today because `explainerSeen` is what un-gates —
+  // anything that starts branching on a *fresh* status here needs its own read.
   const [permission] = Location.useForegroundPermissions();
   const uiHydrated = useUiStore((s) => s.hydrated);
   const explainerSeen = useUiStore((s) => s.locationExplainerSeen);
@@ -159,12 +163,23 @@ function Gate() {
     );
   }
 
-  // Both of these are async and unresolved for the first frames of a signed-in launch: the OS
-  // permission read (null) and the AsyncStorage rehydration of `explainerSeen` (false until
-  // hydrated). Deciding before either lands would flash the explainer at someone who dismissed it
-  // three months ago. Kept as its own check rather than folded into the spinner above so a failed
-  // /me still reaches the Retry screen instead of hanging here.
-  if (signedIn && (!permission || !uiHydrated)) {
+  // Rehydration is async and `explainerSeen` reads false until it lands, so deciding early would
+  // flash the explainer at someone who dismissed it three months ago. ui.ts sets `hydrated` on the
+  // error path too, so this cannot hang. Kept as its own check rather than folded into the spinner
+  // above so a failed /me still reaches the Retry screen instead of hanging here.
+  if (signedIn && !uiHydrated) {
+    return spinner;
+  }
+
+  // Only a user who has never seen the explainer waits on the OS read; everyone else is past this
+  // gate on `explainerSeen` alone and never blocks on a permission call again.
+  //
+  // ponytail: usePermission has no error channel (expo-modules-core PermissionsHook.ts: the
+  // getMethod promise is unguarded, so a rejection leaves `permission` null forever), which on web
+  // or a dev build without the native module leaves a first-launch user on this spinner with no
+  // Retry. Ceiling: that one cohort. Upgrade path: read the status here with a plain
+  // getForegroundPermissionsAsync().catch() and treat a failure as UNDETERMINED.
+  if (signedIn && !explainerSeen && !permission) {
     return spinner;
   }
 
