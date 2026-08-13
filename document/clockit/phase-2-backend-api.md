@@ -48,7 +48,7 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 7.1: Domain counters + span attributes
 - [x] Task 8: Seed command
   - [x] 8.1: `cmd/seed/main.go`
-- [ ] Task 9: Verification
+- [x] Task 9: Verification
 
 ## Implementation Details
 
@@ -261,8 +261,8 @@ Flags: `-owner-sub`, `-owner-email`, `-employee-emails` (comma list). Creates ow
 
 - [x] 9.1: `make test` green (unit + Mongo-backed handler tests via compose).
 - [x] 9.2: `make lint` clean.
-- [ ] 9.3: Manual smoke with `curl` + a real Auth0 token (get one from the Auth0 dashboard "Test" tab): me → create employer → add member → clock-in (in/out of range) → clock-out → report. Verify sealed fields in `mongosh` are binData, not plaintext. *(Done without token: seed + mongosh confirm all `*_enc`/`dek_wrapped` are binData, no plaintext coords. Token smoke blocked: `.env` AUTH0_DOMAIN is a placeholder — needs the real beta tenant.)*
-- [ ] 9.4: Traces for clock-in show validation attributes; counters visible in local Grafana. *(Done without token: OTLP pipeline verified — Tempo shows `clockit-api` route spans, Prometheus shows `http_server_request_duration` per route. Domain counters/span attrs need authenticated traffic; covered by 7.1's live ManualReader probe, Grafana rendering pending real token.)*
+- [x] 9.3: Manual smoke with `curl` + a real Auth0 token (get one from the Auth0 dashboard "Test" tab): me → create employer → add member → clock-in (in/out of range) → clock-out → report. Verify sealed fields in `mongosh` are binData, not plaintext. *(Done 2026-08-13 against real tenant with M2M token: me/JIT 200 → employer 201 → member 201 + rate 204 → out-of-range clock-in 422 `{distance_m:1924,limit_m:1000}` → in-range 201 `location_verified:true` → same-client_id replay 200 → pings `{accepted:2}` → clock-out 200 → tips PUT → report binds entry to correct Vancouver local day with decrypted rate; employer entries view exposes no coordinates. mongosh: `anchor_enc`, `loc_enc` (entry+pings), `hourly_rate_cents_enc`, `dek_wrapped` all binData; no plaintext coords in any doc.)*
+- [x] 9.4: Traces for clock-in show validation attributes; counters visible in local Grafana. *(Done 2026-08-13 with authenticated traffic: Prometheus has `clockit_clock_in_total{result=ok|rejected}`, `clockit_proximity_rejected_total{reason=out_of_range}`, `clockit_outbox_sync_total{result=replay|ok}` all matching smoke actions exactly; Tempo clock-in/out spans carry `clockit.verdict` (ok/out_of_range/replay), `clockit.distance_m`, `clockit.accuracy_m`.)*
 
 ### Phase completion notes (deviations from plan)
 
@@ -277,4 +277,5 @@ Flags: `-owner-sub`, `-owner-email`, `-employee-emails` (comma list). Creates ow
 - 6.2: tips PUT capped at 100,000,000¢ (prevents split overflow); report window uses ±24 h slack prefilter with authoritative string-day binding in `buildReport` (DST-gap zones); orphan tips (tip on shift-less day) emitted as day rows with empty rows.
 - 7.1: replays excluded from `clock_in.total` (land in `outbox.sync{replay}`); proximity reason enum allowlisted; rejection reason folded into `clockit.verdict`.
 - 8.1: seed purges by ownership (owner's employers + seeded users' entries), no marker field; survives SIGKILL at any point.
+- 9.3: smoke used an M2M (client-credentials) token — the post-login Action doesn't run for it, so the JIT user has an empty email; employer-scoped clock-in required linking the membership to the M2M user via mongosh (the API claim path is covered by user/employer handler tests). Auth0 gotcha hit live: an API identifier created with a leading space is immutable and breaks `aud` matching — the API had to be deleted and recreated.
 - Cross-phase flags for later phases: phase-3 outbox must chunk pings ≤64/batch and handle STALE_TIMESTAMP on late clock-out flush; phase-4 report table wants per-shift in/out columns the day×member report rows can't carry (join `GET /entries`); phase-4 palette: members `id` is membership id, entries `user.id` is user id — join on email or user id; phase-6: Auth0 tenant must enforce verified email before membership linking (immediate-claim trusts user-doc existence); `_ "time/tzdata"` needed in distroless image.
