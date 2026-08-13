@@ -47,8 +47,7 @@ export function GuardedLayout() {
   const [selectedId, setSelectedId] = useState(readStoredEmployerId);
   const {pathname, search} = useLocation();
 
-  // Serves both the error Banner's Retry and EmployerContext.refresh(): re-running the
-  // fetch is the only way a just-created employer reaches the rest of the app.
+  // Serves both the error Banner's Retry and EmployerContext.refresh().
   // The two states differ on purpose: refresh() is called from a child inside <Outlet/>,
   // so clearing the list would unmount the very component that called it (and flash a
   // whole-app spinner on every mutation). From 'error' there is nothing on screen worth
@@ -66,6 +65,16 @@ export function GuardedLayout() {
     }
     setSelectedId(id);
   }, []);
+
+  // Onboarding's create path. Both updates land before the caller's navigate() in the
+  // same batch, so the zero-employer redirect below never sees the stale empty list.
+  const addEmployer = useCallback(
+    (employer: Employer) => {
+      setEmployers((prev) => (Array.isArray(prev) ? [...prev, employer] : [employer]));
+      setEmployerId(employer.id);
+    },
+    [setEmployerId],
+  );
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -99,9 +108,10 @@ export function GuardedLayout() {
       // than a write-back effect.
       employer: employerList.find((e) => e.id === selectedId) ?? employerList[0] ?? null,
       setEmployerId,
+      addEmployer,
       refresh,
     }),
-    [employerList, selectedId, setEmployerId, refresh],
+    [employerList, selectedId, setEmployerId, addEmployer, refresh],
   );
 
   if (isLoading) {
@@ -141,7 +151,8 @@ export function GuardedLayout() {
   }
 
   // Onboarding itself renders with zero employers — redirecting from it would loop.
-  // A create there calls refresh(), so the new employer lands before the next render.
+  // A create there calls addEmployer(), so the new employer is already in this list by
+  // the render that its navigate() produces.
   if (employers.length === 0 && pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />;
   }

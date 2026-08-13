@@ -6,7 +6,15 @@ export interface EmployerState {
   /** null only when the caller owns none — the /onboarding case. */
   employer: Employer | null;
   setEmployerId: (id: string) => void;
-  /** Re-fetches GET /v1/employers. How a freshly created employer enters the app. */
+  /**
+   * Seeds a just-created employer into the list and selects it, synchronously. Onboarding
+   * needs this rather than refresh(): the guard bounces every route back to /onboarding
+   * while the list is empty, and refresh() only *schedules* a refetch, so a navigate that
+   * follows it loses the race. POST /v1/employers returns the same shape the list does,
+   * so there is nothing a refetch would add.
+   */
+  addEmployer: (employer: Employer) => void;
+  /** Re-fetches GET /v1/employers. Recovery from a failed load. */
   refresh: () => void;
 }
 
