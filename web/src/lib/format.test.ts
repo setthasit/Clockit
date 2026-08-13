@@ -1,5 +1,5 @@
 import {expect, test} from 'vitest';
-import {cents, dayLabel, minutesToHM, timeRange, toCents} from './format';
+import {cents, dayLabel, dollars, minutesToHM, timeRange, toCents} from './format';
 
 test('cents renders integer cents as dollars', () => {
   expect(cents(1800)).toBe('$18.00');
@@ -8,6 +8,26 @@ test('cents renders integer cents as dollars', () => {
   expect(cents(-1800)).toBe('-$18.00');
   expect(cents(1800.6)).toBe('$18.01');
   expect(cents(Number.NaN)).toBe('$0.00');
+});
+
+test('dollars renders the same amount bare, for a file rather than a screen', () => {
+  // No symbol and no thousands separator: both stop a CSV field being read as a number,
+  // and the separator would split the field into two columns.
+  expect(dollars(1800)).toBe('18.00');
+  expect(dollars(100_000_000)).toBe('1000000.00');
+  expect(dollars(-1800)).toBe('-18.00');
+  expect(dollars(0)).toBe('0.00');
+  expect(dollars(5)).toBe('0.05');
+
+  // 1807/100 is 18.069999999999999 in binary floating point — a truncating render would
+  // hand the bookkeeper 18.06 for the rate the screen shows as $18.07.
+  expect(dollars(1807)).toBe('18.07');
+  // The exported figure is the figure on screen, stripped of its currency dressing.
+  expect(cents(1807)).toBe(`$${dollars(1807)}`);
+
+  // Same guards as cents(): a fractional or non-finite cent count is a wire fault.
+  expect(dollars(1800.6)).toBe('18.01');
+  expect(dollars(Number.NaN)).toBe('0.00');
 });
 
 test('toCents converts dollars without losing a penny to float error', () => {

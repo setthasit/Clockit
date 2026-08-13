@@ -11,9 +11,26 @@ function toDate(value: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+// Every money figure arrives as integer cents. A fraction or a NaN is a wire fault, not an
+// amount: both renderers pass through here so a value can never read one way on screen and
+// another in the exported file.
+function whole(n: number): number {
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
 /** Integer cents to dollars: 1800 → "$18.00", -1800 → "-$18.00", 0 → "$0.00". */
 export function cents(n: number): string {
-  return usd.format((Number.isFinite(n) ? Math.round(n) : 0) / 100);
+  return usd.format(whole(n) / 100);
+}
+
+/**
+ * The same amount for machine-read output: 1807 → "18.07", -1800 → "-18.00". No currency
+ * symbol and no thousands separator — a CSV field carrying either stops being a number to
+ * the spreadsheet that opens it. Exact for every integer cent: a double holds cents/100 to
+ * well within half a cent, so toFixed(2) always names the cent that went in.
+ */
+export function dollars(n: number): string {
+  return (whole(n) / 100).toFixed(2);
 }
 
 /**
@@ -56,14 +73,20 @@ export function dayLabel(date: string, tz: string): string {
 
 /** Shift bounds — "9:02–17:35"; an open shift (no clock-out) renders "9:02–now". */
 export function timeRange(inISO: string, outISO: string | null | undefined, tz: string): string {
-  const start = clock(inISO, tz);
+  const start = clockTime(inISO, tz);
   if (!start) return '—';
-  const end = outISO ? (clock(outISO, tz) ?? '—') : 'now';
+  const end = outISO ? (clockTime(outISO, tz) ?? '—') : 'now';
   return `${start}–${end}`;
 }
 
-// ponytail: a formatter per call; memoize by tz only if the calendar grid measures slow.
-function clock(value: string, tz: string): string | null {
+/**
+ * One wall-clock time in `tz` — "9:02" — or null when the value will not parse. The table
+ * renders the pair as a range and the CSV export gives each end its own column, so both
+ * read the same formatter and no exported time can disagree with the one on screen.
+ *
+ * ponytail: a formatter per call; memoize by tz only if the calendar grid measures slow.
+ */
+export function clockTime(value: string, tz: string): string | null {
   const d = toDate(value);
   if (!d) return null;
 

@@ -17,6 +17,7 @@ import {pixel, proportional, Table, type TableColumn} from '@astryxdesign/core/T
 import {Heading, Text} from '@astryxdesign/core/Text';
 import {TipCell} from '../components/TipCell';
 import {api} from '../lib/api';
+import {reportToCsv} from '../lib/csv';
 import {useActiveEmployer} from '../lib/employer';
 import {cents, dayLabel, minutesToHM} from '../lib/format';
 import {buildRows, shiftsByMemberDay, type Report, type Row} from '../lib/report';
@@ -86,6 +87,11 @@ export function TableRoute() {
   // range while it loads and suppress the spinner, making a live request read as settled.
   const [failedRange, setFailedRange] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // The request this state answers, `from|to|attempt`. A tip save bumps attempt and leaves
+  // the old rows on screen while the refetch runs (see TipCell), so for those two requests
+  // the day's pool and the shares beside it disagree. On screen that is momentary; in a
+  // downloaded file it is permanent and unmarked, so the export waits for the answer.
+  const [settled, setSettled] = useState<string | null>(null);
   const reload = useCallback(() => {
     setFailedRange(null);
     setAttempt((n) => n + 1);
@@ -120,6 +126,9 @@ export function TableRoute() {
       })
       .catch(() => {
         if (!cancelled) setFailedRange(`${from}|${to}`);
+      })
+      .finally(() => {
+        if (!cancelled) setSettled(`${from}|${to}|${attempt}`);
       });
 
     return () => {
@@ -129,9 +138,28 @@ export function TableRoute() {
 
   const loaded = report?.range === `${from}|${to}` ? report : null;
   const hasFailed = failedRange === `${from}|${to}`;
+  const isFetching = settled !== `${from}|${to}|${attempt}`;
   const rows = loaded ? buildRows(loaded, tz, from, to) : [];
   const hasUnverified = rows.some((row) => row.isUnverified);
   const columns = useMemo(() => columnsFor(reload), [reload]);
+
+  // The file is the rows on screen — reportToCsv rebuilds them from this same report, and
+  // `loaded` is only ever the one answering the range in the URL.
+  const exportCsv = () => {
+    if (!loaded) return;
+    const url = URL.createObjectURL(
+      // The BOM is for Excel, which reads a CSV without one in the machine's ANSI codepage
+      // and turns every accented name into mojibake.
+      new Blob(['\ufeff', reportToCsv(loaded, tz, from, to)], {type: 'text/csv;charset=utf-8'}),
+    );
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `clockit-report-${from}-${to}.csv`;
+    link.click();
+    // The file carries hourly rates, and an object URL is readable by anything holding it,
+    // so it lives exactly as long as the click that consumed it.
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <VStack gap={5}>
@@ -142,19 +170,36 @@ export function TableRoute() {
             Hours, tips and pay per day, grouped in {tz.replace(/_/g, ' ')}.
           </Text>
         </VStack>
-        <DateRangeInput
-          label="Date range"
-          width={320}
-          value={asRange(from, to)}
-          // No clear button: there is no report without a range, so clearing would drop the
-          // parameters and land straight back on this week — a × that appears to do nothing.
-          hasClear={false}
-          // Rates never travel in the URL — only day keys.
-          onChange={(range) =>
-            range && setParams({from: range.start, to: range.end}, {replace: true})
-          }
-          presets={presetsFor(tz)}
-        />
+        <HStack gap={3} vAlign="end" wrap="wrap">
+          <DateRangeInput
+            label="Date range"
+            width={320}
+            value={asRange(from, to)}
+            // No clear button: there is no report without a range, so clearing would drop
+            // the parameters and land straight back on this week — a × that appears to do
+            // nothing.
+            hasClear={false}
+            // Rates never travel in the URL — only day keys.
+            onChange={(range) =>
+              range && setParams({from: range.start, to: range.end}, {replace: true})
+            }
+            presets={presetsFor(tz)}
+          />
+          {/* Nothing on screen is nothing to export, so the button appears only once there
+              are rows, and greys out rather than hand over a file already out of date. */}
+          {rows.length > 0 && (
+            <Button
+              label="Export CSV"
+              isDisabled={isFetching}
+              tooltip={
+                isFetching
+                  ? 'Refreshing these numbers — the file would be out of date.'
+                  : 'Download this range as a CSV.'
+              }
+              onClick={exportCsv}
+            />
+          )}
+        </HStack>
       </HStack>
 
       {hasFailed && (
