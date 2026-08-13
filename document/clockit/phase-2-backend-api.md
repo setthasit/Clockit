@@ -259,7 +259,22 @@ Flags: `-owner-sub`, `-owner-email`, `-employee-emails` (comma list). Creates ow
 
 ### Task 9: Verification
 
-- [ ] 9.1: `make test` green (unit + Mongo-backed handler tests via compose).
-- [ ] 9.2: `make lint` clean.
-- [ ] 9.3: Manual smoke with `curl` + a real Auth0 token (get one from the Auth0 dashboard "Test" tab): me → create employer → add member → clock-in (in/out of range) → clock-out → report. Verify sealed fields in `mongosh` are binData, not plaintext.
-- [ ] 9.4: Traces for clock-in show validation attributes; counters visible in local Grafana.
+- [x] 9.1: `make test` green (unit + Mongo-backed handler tests via compose).
+- [x] 9.2: `make lint` clean.
+- [ ] 9.3: Manual smoke with `curl` + a real Auth0 token (get one from the Auth0 dashboard "Test" tab): me → create employer → add member → clock-in (in/out of range) → clock-out → report. Verify sealed fields in `mongosh` are binData, not plaintext. *(Done without token: seed + mongosh confirm all `*_enc`/`dek_wrapped` are binData, no plaintext coords. Token smoke blocked: `.env` AUTH0_DOMAIN is a placeholder — needs the real beta tenant.)*
+- [ ] 9.4: Traces for clock-in show validation attributes; counters visible in local Grafana. *(Done without token: OTLP pipeline verified — Tempo shows `clockit-api` route spans, Prometheus shows `http_server_request_duration` per route. Domain counters/span attrs need authenticated traffic; covered by 7.1's live ManualReader probe, Grafana rendering pending real token.)*
+
+### Phase completion notes (deviations from plan)
+
+- 2.1: claim filter adds `status: "invited"` (plan's `{email, user_id: null}` would reactivate unclaimed `removed` memberships). New `EMAIL_TAKEN` 409 + `user.ErrEmailTaken`: same email under a second Auth0 sub (no account linking) — plan didn't cover the dual-unique-index conflict.
+- 2.2: employer join for `/v1/me` reads `employers` collection directly in the user package (employer package didn't exist yet; ponytail-noted). Only `active` memberships returned. Empty-string name/phone → 400, no clearing in v1.
+- 3.2: `"Local"`/`""` timezones rejected explicitly (`LoadLocation` quirk); anchor bodies use pointer fields (partial anchor would zero coordinates).
+- 4.1: distance compared as `math.Round(d) > radius` (float noise at exactly 1000 m; matches integer-meter reporting). NaN/Inf inputs → `INVALID_ARGUMENT` before all other checks.
+- 5.2: membership NOT re-checked at clock-out (mid-shift removal must not trap the worker). `close_client_id` has no index (rides `user_id` prefix; ponytail-noted).
+- 5.3: assign restricted to CLOSED entries (assigning an open entry would redirect clock-out validation to the employer anchor → permanent lockout). Assign re-checks position only (skew/mock/accuracy not re-judged).
+- 5.4: pings cap 64 → 400 (batch atomic); accuracy bound but not stored; dt ≤ 0 pairs stored but not speed-checked.
+- 5.6: found+fixed clock-out race (same `client_id` replay racing a concurrent close returned 409 instead of 200 replay).
+- 6.2: tips PUT capped at 100,000,000¢ (prevents split overflow); report window uses ±24 h slack prefilter with authoritative string-day binding in `buildReport` (DST-gap zones); orphan tips (tip on shift-less day) emitted as day rows with empty rows.
+- 7.1: replays excluded from `clock_in.total` (land in `outbox.sync{replay}`); proximity reason enum allowlisted; rejection reason folded into `clockit.verdict`.
+- 8.1: seed purges by ownership (owner's employers + seeded users' entries), no marker field; survives SIGKILL at any point.
+- Cross-phase flags for later phases: phase-3 outbox must chunk pings ≤64/batch and handle STALE_TIMESTAMP on late clock-out flush; phase-4 report table wants per-shift in/out columns the day×member report rows can't carry (join `GET /entries`); phase-4 palette: members `id` is membership id, entries `user.id` is user id — join on email or user id; phase-6: Auth0 tenant must enforce verified email before membership linking (immediate-claim trusts user-doc existence); `_ "time/tzdata"` needed in distroless image.
