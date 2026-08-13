@@ -10,11 +10,16 @@ import {
   View,
 } from "react-native";
 
+import type { Fix } from "@/api/types";
 import { ClockButton } from "@/components/ClockButton";
+import { DistanceBadge } from "@/components/DistanceBadge";
 import { formatClock, formatDuration } from "@/lib/format";
 import { theme } from "@/lib/theme";
+import { getFix } from "@/location/fix";
 import { useClockStore } from "@/stores/clock";
 import { useSessionStore } from "@/stores/session";
+
+const FIX_POLL_MS = 15_000;
 
 export default function Clock() {
   const openEntry = useClockStore((s) => s.openEntry);
@@ -26,6 +31,11 @@ export default function Clock() {
   // the first read resolves, which is why "blocked" below is not simply `!granted`.
   const [permission, , refreshPermission] = Location.useForegroundPermissions();
   const [now, setNow] = useState(() => Date.now());
+  // Owned here, not inside DistanceBadge: task 6.3's EmployerSheet needs a live distance per
+  // membership from the same reading, and two 15 s pollers on one screen would be a defect. The
+  // badge and the sheet both take this as a prop and do their own arithmetic with distanceM.
+  const [fix, setFix] = useState<Fix | null>(null);
+  const [foreground, setForeground] = useState(true);
 
   // Once per launch, not per focus: this tab is the navigator's first screen, so it mounts at
   // launch — and remounts if the gate drops the Stack for a spinner (_layout.tsx:141-147, which
@@ -66,10 +76,20 @@ export default function Clock() {
   // button stays dead until relaunch for exactly the users who just fixed the problem: both routes
   // out of the blocked state below either push /permissions (focus returns here) or leave for
   // Settings (the app foregrounds). One of the two covers every way back.
+  //
+  // The same listener drives the distance poll's background pause, so there is one AppState
+  // subscription on this screen. `!== "background"` rather than `=== "active"`: iOS reports
+  // "inactive" for a pulled-down notification centre or an incoming call banner, and treating
+  // those as gone would tear the poll down and fire a fresh GPS read every time someone glanced
+  // at a notification. currentState is read on focus too — while the tab is blurred this listener
+  // is not mounted, so a background/foreground cycle spent on another tab would otherwise leave
+  // the flag stuck false and the badge dead until the next AppState change.
   useFocusEffect(
     useCallback(() => {
       refreshPermission().catch(() => {});
+      setForeground(AppState.currentState !== "background");
       const sub = AppState.addEventListener("change", (state) => {
+        setForeground(state !== "background");
         if (state === "active") refreshPermission().catch(() => {});
       });
       return () => sub.remove();
@@ -107,6 +127,51 @@ export default function Clock() {
   // builds without the native module, for users already past the explainer gate. Upgrade path is
   // that comment's: read the status directly and treat a failure as UNDETERMINED.
   const blocked = permission != null && !granted;
+
+  // Nothing to show while on shift (the pre-check is about clocking *in*), for a personal-only user
+  // with no anchor to measure against, or without permission — and nothing to show means nothing to
+  // poll. The badge keeps its last reading across a transient "inactive", so `foreground` gates the
+  // polling only, not the rendering.
+  const showDistance = !openEntry && (memberships?.length ?? 0) > 0 && granted;
+  const polling = showDistance && foreground;
+
+  // Self-chaining timeout, not setInterval: getFix() is bounded by its own 15 s race, exactly the
+  // poll period, so an interval could start a second read while the first is still running and then
+  // apply them out of order. Waiting FIX_POLL_MS *after* each reading settles makes overlap
+  // impossible without a generation counter (stores/clock.ts) — the `cancelled` flag from
+  // _layout.tsx is all that is left to need, since only teardown can now race a result. A slow or
+  // timing-out fix backs the cadence off on its own, which is the right direction for battery.
+  //
+  // First read fires immediately: waiting 15 s to say anything would mean the badge is still
+  // "Checking distance…" for most of the time a worker spends on this screen before tapping.
+  useFocusEffect(
+    useCallback(() => {
+      if (!polling) return;
+      let cancelled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const read = async () => {
+        try {
+          const next = await getFix();
+          if (!cancelled) setFix(next);
+        } catch {
+          // A pre-check that cannot read the GPS is not worth alarming anyone with: the button
+          // still works and the server still decides. Caught here so it is never an unhandled
+          // rejection, and the error object is deliberately neither inspected nor logged.
+          if (!cancelled) setFix(null);
+        }
+        if (!cancelled) timer = setTimeout(read, FIX_POLL_MS);
+      };
+      read();
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+        // Dropped rather than kept: a reading from before the tab was left is a distance the
+        // worker may have walked out of, and showing it stale is worse than showing nothing for
+        // the moment it takes the immediate read above to replace it.
+        setFix(null);
+      };
+    }, [polling]),
+  );
 
   return (
     <View style={styles.screen}>
@@ -147,6 +212,12 @@ export default function Clock() {
       )}
 
       <View style={styles.center}>
+        {/* Above the button rather than under the card: it answers "will this tap work", so it
+            belongs where the thumb is looking. */}
+        {showDistance && (
+          <DistanceBadge memberships={memberships ?? []} fix={fix} />
+        )}
+
         <ClockButton
           label={openEntry ? "Clock out" : "Clock in"}
           disabled={!granted}
@@ -171,7 +242,10 @@ export default function Clock() {
                   ? router.push("/permissions")
                   : Linking.openSettings().catch(() => {})
               }
-              style={({ pressed }) => [styles.action, pressed && styles.pressed]}
+              style={({ pressed }) => [
+                styles.action,
+                pressed && styles.pressed,
+              ]}
             >
               <Text style={styles.actionLabel}>
                 {permission?.canAskAgain ? "Turn on location" : "Open settings"}
