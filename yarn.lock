@@ -77,10 +77,10 @@
     zod "^3.25 || ^4.0"
     zod-to-json-schema "^3.25.1"
 
-"@swmansion/argent@^0.20.0":
-  version "0.20.0"
-  resolved "https://registry.yarnpkg.com/@swmansion/argent/-/argent-0.20.0.tgz#b07c5210d3993dfe4ef735cc1a99a4ebf386f1f5"
-  integrity sha512-MQMmfCKufi2MPZHsBuQ9hRiLVhtbt2G9SRBEprVFNceCCb1UeNNLKwNAdsjOXR0lX21CCs18xb6ICYJKekD//A==
+"@swmansion/argent@0.20.1-next.7":
+  version "0.20.1-next.7"
+  resolved "https://registry.yarnpkg.com/@swmansion/argent/-/argent-0.20.1-next.7.tgz#05580906aaa7b1ae7f3c9d640e5c8c78171c3466"
+  integrity sha512-GuxiaUW95h7IJj8uKD0uhqxoPFpX8KYDCMW1Z2BUfOWD2dibEN+mYLyTdL+q4ksahDFZKggHZDHMn8+YhVdFHQ==
   dependencies:
     "@fails-components/webtransport" "^1.6.3"
     "@fails-components/webtransport-transport-http3-quiche" "^1.6.3"

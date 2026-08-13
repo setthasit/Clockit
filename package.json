@@ -22,6 +22,6 @@
   },
   "homepage": "https://github.com/setthasit/Clockit#readme",
   "devDependencies": {
-    "@swmansion/argent": "^0.20.0"
+    "@swmansion/argent": "0.20.1-next.7"
   }
 }
