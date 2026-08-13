@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useMemo, useState} from 'react';
 import {useSearchParams} from 'react-router';
 import {Banner} from '@astryxdesign/core/Banner';
 import {Button} from '@astryxdesign/core/Button';
@@ -17,11 +17,11 @@ import {pixel, proportional, Table, type TableColumn} from '@astryxdesign/core/T
 import {Heading, Text} from '@astryxdesign/core/Text';
 import {api} from '../lib/api';
 import {useActiveEmployer} from '../lib/employer';
-import {cents, dayLabel, minutesToHM, timeRange} from '../lib/format';
+import {cents, dayLabel, minutesToHM} from '../lib/format';
+import {buildRows, shiftsByMemberDay, type Report, type Row} from '../lib/report';
 import type {EmployerEntry, ReportDay} from '../lib/types';
 import {
   addDays,
-  dayKey,
   isDayKey,
   monthOf,
   startOfDay,
@@ -29,35 +29,6 @@ import {
   weekStartOf,
   type DayKey,
 } from '../lib/week';
-
-/** One rendered line. Day headers, member rows and the grand total share one column set,
- *  so every figure sits under the heading that names it. */
-type Row = {
-  key: string;
-  kind: 'day' | 'member' | 'total';
-  /** Date label, member name, or the grand-total caption. */
-  label: string;
-  /** Day headers only — the day's tip pool, which task 6.2 makes editable. */
-  tip: {day: DayKey; cents: number} | null;
-  note: string | null;
-  /** Member rows only; null when no shift matched (see shiftsByMemberDay). */
-  times: string | null;
-  isUnverified: boolean;
-  minutes: number;
-  rateCents: number | null;
-  basePayCents: number | null;
-  tipShareCents: number;
-  totalCents: number;
-};
-
-interface Report {
-  /** The range this answers, `from|to`. Day rows carry their own dates, so the outgoing
-   *  range must not stay on screen under a new one — a mismatch here reads as loading. */
-  range: string;
-  days: ReportDay[];
-  /** Closed shifts by `${day}|${userId}`, in clock-in order. */
-  shifts: Map<string, EmployerEntry[]>;
-}
 
 const asRange = (start: DayKey, end: DayKey): DateRange => ({
   start: start as ISODateString,
@@ -69,7 +40,8 @@ const weekRange = (today: DayKey, shiftDays: number): DateRange => {
   return asRange(start, addDays(start, 6));
 };
 
-// Evaluated per click, not per render: a page left open overnight still means today.
+// getRange is re-evaluated whenever the picker asks for it — including on the click that
+// applies it — so a page left open overnight still means today, not yesterday's today.
 function presetsFor(tz: string): DateRangePreset[] {
   return [
     {label: 'This week', getRange: () => weekRange(todayKey(tz), 0)},
@@ -85,10 +57,11 @@ function presetsFor(tz: string): DateRangePreset[] {
 }
 
 /**
- * The displayed range lives in the query string — the calendar's "View in table" link
- * arrives as ?from&to, and the URL stays the single source of truth so a reload or a
- * shared link shows the same days. Anything that is not two real calendar dates in order
- * falls back to this week rather than 400ing the report endpoint.
+ * The displayed range comes from the query string — the calendar's "View in table" link
+ * arrives as ?from&to, and picking a range writes them back, so from then on a reload or a
+ * shared link shows the same days. A bare /table falls back to this week and leaves the URL
+ * alone. Anything that is not two real calendar dates in order falls back the same way,
+ * rather than 400ing the report endpoint.
  */
 function rangeFromParams(params: URLSearchParams, tz: string): DateRange {
   const from = params.get('from') ?? '';
@@ -107,8 +80,15 @@ export function TableRoute() {
   // No employer tag on any of this state: Shell keys <Outlet/> by employer id, so a
   // switch remounts the route and clears all of it at once.
   const [report, setReport] = useState<Report | null>(null);
-  const [hasFailed, setHasFailed] = useState(false);
+  // Both the report and the failure carry the range they belong to, so a stale one is
+  // recognised rather than shown: an outgoing banner would otherwise sit over the next
+  // range while it loads and suppress the spinner, making a live request read as settled.
+  const [failedRange, setFailedRange] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const reload = useCallback(() => {
+    setFailedRange(null);
+    setAttempt((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,10 +116,9 @@ export function TableRoute() {
           days: days.days,
           shifts: shiftsByMemberDay(entries.entries, tz),
         });
-        setHasFailed(false);
       })
       .catch(() => {
-        if (!cancelled) setHasFailed(true);
+        if (!cancelled) setFailedRange(`${from}|${to}`);
       });
 
     return () => {
@@ -148,7 +127,10 @@ export function TableRoute() {
   }, [employer.id, tz, from, to, attempt]);
 
   const loaded = report?.range === `${from}|${to}` ? report : null;
+  const hasFailed = failedRange === `${from}|${to}`;
   const rows = loaded ? buildRows(loaded, tz, from, to) : [];
+  const hasUnverified = rows.some((row) => row.isUnverified);
+  const columns = useMemo(() => columnsFor(reload), [reload]);
 
   return (
     <VStack gap={5}>
@@ -163,10 +145,12 @@ export function TableRoute() {
           label="Date range"
           width={320}
           value={asRange(from, to)}
-          // Clearing drops the parameters and the range falls back to this week; there is
-          // no report to show without one. Rates never travel in the URL — only day keys.
+          // No clear button: there is no report without a range, so clearing would drop the
+          // parameters and land straight back on this week — a × that appears to do nothing.
+          hasClear={false}
+          // Rates never travel in the URL — only day keys.
           onChange={(range) =>
-            setParams(range ? {from: range.start, to: range.end} : {}, {replace: true})
+            range && setParams({from: range.start, to: range.end}, {replace: true})
           }
           presets={presetsFor(tz)}
         />
@@ -177,19 +161,7 @@ export function TableRoute() {
           status="error"
           title="Could not load this report"
           description="Check your connection and try again."
-          endContent={
-            <Button
-              label="Retry"
-              variant="secondary"
-              size="sm"
-              // Back to the spinner: leaving the banner up until the retry resolves
-              // reads as a dead button.
-              onClick={() => {
-                setHasFailed(false);
-                setAttempt((n) => n + 1);
-              }}
-            />
-          }
+          endContent={<Button label="Retry" variant="secondary" size="sm" onClick={reload} />}
         />
       )}
 
@@ -199,7 +171,19 @@ export function TableRoute() {
         </Center>
       )}
 
-      {rows.length > 0 && <Table data={rows} columns={COLUMNS} idKey="key" density="compact" />}
+      {rows.length > 0 && <Table data={rows} columns={columns} idKey="key" density="compact" />}
+
+      {/* The dot alone would carry its meaning in colour, reachable only by hover — and on
+          touch there is no hover at all. One legend line says it once for the whole table
+          instead of a label on every row, and only appears when a dot is on screen. */}
+      {hasUnverified && (
+        <HStack gap={2} vAlign="center">
+          <StatusDot variant="warning" label="Location not verified" />
+          <Text type="supporting" color="secondary">
+            Amber dot: clocked in outside the work location.
+          </Text>
+        </HStack>
+      )}
 
       {loaded?.days.length === 0 && (
         <EmptyState
@@ -212,200 +196,114 @@ export function TableRoute() {
 }
 
 /**
- * Closed shifts bucketed by the day they clocked in on, which is how the report groups
- * them too. Open shifts are left out on purpose: the report pays no minutes for one, so
- * showing its hours next to a total that excludes them would contradict the money.
+ * Member rows read as data; day headers and the grand total read as summaries. The total is
+ * the row an employer actually pays from, so it steps up a type size as well — bold alone
+ * left it reading as one more day group. Astryx's data-driven Table styles cells and not
+ * rows, so the distinction has to be made here, in the cells themselves.
  */
-function shiftsByMemberDay(entries: EmployerEntry[], tz: string): Map<string, EmployerEntry[]> {
-  const byMemberDay = new Map<string, EmployerEntry[]>();
-
-  // The entries endpoint answers newest first; a member's second shift of the day must
-  // still read after their first.
-  const chronological = entries
-    .filter((entry) => entry.clock_out_at !== null)
-    .sort((a, b) => Date.parse(a.clock_in_at) - Date.parse(b.clock_in_at));
-
-  for (const entry of chronological) {
-    const day = dayKey(entry.clock_in_at, tz);
-    if (!day) continue;
-    const key = `${day}|${entry.user.id}`;
-    const bucket = byMemberDay.get(key);
-    if (bucket) bucket.push(entry);
-    else byMemberDay.set(key, [entry]);
-  }
-
-  return byMemberDay;
-}
-
-function buildRows({days, shifts}: Report, tz: string, from: DayKey, to: DayKey): Row[] {
-  const rows: Row[] = [];
-  const grand = {minutes: 0, basePay: 0, tipShare: 0, total: 0};
-
-  for (const day of days) {
-    rows.push({
-      key: day.date,
-      kind: 'day',
-      label: dayLabel(day.date, tz),
-      tip: {day: day.date, cents: day.tip_cents},
-      note: day.rows.length === 0 ? 'Nobody worked this day, so this tip is unassigned.' : null,
-      times: null,
-      isUnverified: false,
-      minutes: day.total_minutes,
-      rateCents: null,
-      basePayCents: day.total_base_pay_cents,
-      tipShareCents: day.total_tip_share_cents,
-      totalCents: day.total_cents,
-    });
-
-    // The only arithmetic on this page: the endpoint returns no range totals, so these add
-    // up the per-day totals it does return. Nothing else here is derived — every per-day
-    // and per-member figure is rendered exactly as the server computed it.
-    grand.minutes += day.total_minutes;
-    grand.basePay += day.total_base_pay_cents;
-    grand.tipShare += day.total_tip_share_cents;
-    grand.total += day.total_cents;
-
-    for (const row of day.rows) {
-      const worked = shifts.get(`${day.date}|${row.user.id}`) ?? [];
-      rows.push({
-        key: `${day.date}|${row.user.id}`,
-        kind: 'member',
-        // An invited member who never signed in has no name, but can have no shifts either;
-        // the email is the fallback the rest of the app uses.
-        label: row.user.name || row.user.email,
-        tip: null,
-        note: null,
-        times: worked.map((e) => timeRange(e.clock_in_at, e.clock_out_at, tz)).join(', ') || null,
-        isUnverified: worked.some((e) => !e.location_verified),
-        minutes: row.minutes,
-        rateCents: row.hourly_rate_cents,
-        basePayCents: row.base_pay_cents,
-        tipShareCents: row.tip_share_cents,
-        totalCents: row.total_cents,
-      });
-    }
-  }
-
-  if (rows.length === 0) return rows;
-
-  // ponytail: a body row, not a <tfoot>. Astryx's TableFooter is children-mode only, which
-  // would mean hand-rolling the header cells and column widths this table gets for free.
-  // Upgrade path if the totals must stick to the viewport: move the whole table to children
-  // mode and put this row in TableFooter.
-  rows.push({
-    key: 'range-total',
-    kind: 'total',
-    label: `Range total · ${dayLabel(from, tz)} – ${dayLabel(to, tz)}`,
-    tip: null,
-    note: null,
-    times: null,
-    isUnverified: false,
-    minutes: grand.minutes,
-    rateCents: null,
-    basePayCents: grand.basePay,
-    tipShareCents: grand.tipShare,
-    totalCents: grand.total,
-  });
-
-  return rows;
-}
-
-/** Member rows read as data; the day header and the grand total read as summaries. */
-const weightOf = (row: Row) => (row.kind === 'member' ? undefined : 'bold');
-
 const summary = (row: Row, value: string) => (
-  <Text type="body" weight={weightOf(row)}>
+  <Text
+    type={row.kind === 'total' ? 'large' : 'body'}
+    weight={row.kind === 'member' ? undefined : 'bold'}>
     {value}
   </Text>
 );
 
-const COLUMNS: TableColumn<Row>[] = [
-  {
-    key: 'label',
-    header: 'Employee',
-    width: proportional(2),
-    renderCell: (row) => (
-      <VStack gap={0.5}>
-        <HStack gap={2} vAlign="center">
-          {/* Amber, from Astryx's own warning semantic — the same verdict the calendar
-              draws as a dashed bar. */}
-          {row.isUnverified && (
-            <StatusDot
-              variant="warning"
-              label="Location not verified"
-              tooltip="Clocked in outside the work location"
-            />
+/** Built per component, not per module: task 6.2's tip editor has to refetch the report
+ *  after a successful PUT, and only the route holds that. */
+function columnsFor(onTipSaved: () => void): TableColumn<Row>[] {
+  return [
+    {
+      key: 'label',
+      header: 'Employee',
+      width: proportional(2),
+      renderCell: (row) => (
+        <VStack gap={0.5}>
+          <HStack gap={2} vAlign="center">
+            {/* Amber, from Astryx's own warning semantic — the same verdict the calendar
+                draws as a dashed bar. The legend under the table names it in words. */}
+            {row.isUnverified && (
+              <StatusDot
+                variant="warning"
+                label="Location not verified"
+                tooltip="Clocked in outside the work location"
+              />
+            )}
+            {summary(row, row.label)}
+            {row.tip && <DayTip day={row.tip.day} cents={row.tip.cents} onSaved={onTipSaved} />}
+          </HStack>
+          {row.note && (
+            <Text type="supporting" color="secondary">
+              {row.note}
+            </Text>
           )}
-          {summary(row, row.label)}
-          {row.tip && <DayTip day={row.tip.day} cents={row.tip.cents} />}
-        </HStack>
-        {row.note && (
-          <Text type="supporting" color="secondary">
-            {row.note}
-          </Text>
-        )}
-      </VStack>
-    ),
-  },
-  {
-    key: 'times',
-    header: 'In–out',
-    width: proportional(1),
-    renderCell: (row) => (
-      <Text type="body" color="secondary">
-        {row.times ?? ''}
-      </Text>
-    ),
-  },
-  {
-    key: 'minutes',
-    header: 'Hours',
-    width: pixel(90),
-    align: 'end',
-    renderCell: (row) => summary(row, minutesToHM(row.minutes)),
-  },
-  {
-    key: 'rateCents',
-    header: 'Rate',
-    width: pixel(110),
-    align: 'end',
-    renderCell: (row) =>
-      row.kind !== 'member' ? null : (
-        <Text type="body" color={row.rateCents === null ? 'secondary' : undefined}>
-          {row.rateCents === null ? 'Not set' : cents(row.rateCents)}
+        </VStack>
+      ),
+    },
+    {
+      key: 'times',
+      header: 'In–out',
+      width: proportional(1),
+      // A member row exists only because the server paid minutes for a closed entry, so a
+      // member with no shift joined is a broken join, not an unremarkable row. It reads as
+      // missing data rather than as a blank, verified-looking shift with no amber dot.
+      renderCell: (row) => (
+        <Text type="body" color="secondary">
+          {row.kind === 'member' ? (row.times ?? '—') : ''}
         </Text>
       ),
-  },
-  {
-    key: 'basePayCents',
-    header: 'Base pay',
-    width: pixel(120),
-    align: 'end',
-    // Blank, not zero: a member with no rate has earned an amount nobody has decided yet.
-    renderCell: (row) => summary(row, row.basePayCents === null ? '—' : cents(row.basePayCents)),
-  },
-  {
-    key: 'tipShareCents',
-    header: 'Tip share',
-    width: pixel(120),
-    align: 'end',
-    renderCell: (row) => summary(row, cents(row.tipShareCents)),
-  },
-  {
-    key: 'totalCents',
-    header: 'Total',
-    width: pixel(120),
-    align: 'end',
-    renderCell: (row) => summary(row, cents(row.totalCents)),
-  },
-];
+    },
+    {
+      key: 'minutes',
+      header: 'Hours',
+      width: pixel(90),
+      align: 'end',
+      renderCell: (row) => summary(row, minutesToHM(row.minutes)),
+    },
+    {
+      key: 'rateCents',
+      header: 'Rate',
+      width: pixel(110),
+      align: 'end',
+      renderCell: (row) =>
+        row.kind !== 'member' ? null : (
+          <Text type="body" color={row.rateCents === null ? 'secondary' : undefined}>
+            {row.rateCents === null ? 'Not set' : cents(row.rateCents)}
+          </Text>
+        ),
+    },
+    {
+      key: 'basePayCents',
+      header: 'Base pay',
+      width: pixel(120),
+      align: 'end',
+      // Blank, not zero: a member with no rate has earned an amount nobody has decided yet.
+      renderCell: (row) => summary(row, row.basePayCents === null ? '—' : cents(row.basePayCents)),
+    },
+    {
+      key: 'tipShareCents',
+      header: 'Tip share',
+      width: pixel(120),
+      align: 'end',
+      renderCell: (row) => summary(row, cents(row.tipShareCents)),
+    },
+    {
+      key: 'totalCents',
+      header: 'Total',
+      width: pixel(120),
+      align: 'end',
+      renderCell: (row) => summary(row, cents(row.totalCents)),
+    },
+  ];
+}
 
 /**
- * ponytail: the day's tip pool, read-only. Task 6.2 replaces this component's body with the
- * inline editor that PUTs on blur; the day it writes to and the amount it starts from are
- * already its props, so the call site above does not move.
+ * ponytail: the day's tip pool, read-only. Task 6.2 lifts this into components/TipCell.tsx
+ * as the inline editor that PUTs on blur — so the call site above gains an import and a
+ * rename, but nothing else: the day it writes to, the amount it starts from and the refetch
+ * it fires on success are already its props.
  */
-function DayTip({cents: amount}: {day: DayKey; cents: number}) {
+function DayTip({cents: amount}: {day: DayKey; cents: number; onSaved: () => void}) {
   return (
     <Text type="supporting" color="secondary">
       Tips {cents(amount)}

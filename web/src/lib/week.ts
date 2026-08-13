@@ -130,7 +130,9 @@ function offsetMinutes(ms: number, tz: string): number {
  * midnight, so the clock rewinds through it — this returns the second one, up to three
  * hours late. It is still minute zero of the right day, and only `from` is affected
  * (a late `to` only widens the window), so at worst the lead-in day loses shifts clocked
- * in during the repeat. Last occurrences in the current tzdb: Asia/Amman and Asia/Gaza
+ * in during the repeat: a missing bar on the calendar, and on the table a member row that
+ * still shows its money — the report windows server-side — with its in–out times and its
+ * unverified dot gone. Last occurrences in the current tzdb: Asia/Amman and Asia/Gaza
  * 2021, Antarctica/Casey and Antarctica/Vostok 2023. Upgrade path: replace both probes
  * with a binary search over [utcMidnight - 26h, utcMidnight + 26h] for the first minute
  * whose zoned day is `day` — exact for repeats too, at ~16 formatter calls instead of 2.
