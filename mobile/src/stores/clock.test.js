@@ -129,7 +129,42 @@ test('an offline tap mid-flight is not overwritten by the stale server answer', 
   assert.notEqual(clock().pendingSince, null);
 });
 
-test('setOpen clears pendingSince, which re-arms hydrate', async () => {
+test('an outbox write accepted mid-flight is not overwritten by the stale server answer', async () => {
+  reset();
+  // The case the pendingSince guard could not see: offline clock-in, then reconnect fires both a
+  // hydrate and an outbox flush. The flush's 201 arrives first and calls setOpen, which clears
+  // pendingSince — so by the time the hydrate's older "no open entry" lands, the flag that was
+  // meant to protect it is gone. The server agrees the user is on shift; only the response is old.
+  clock().setPending(entry('queued', 'open', '2026-02-13T09:00:00Z'));
+  let respond;
+  setListEntries(() => new Promise((resolve) => (respond = () => resolve([]))));
+
+  const hydrating = clock().hydrateFromServer();
+  const accepted = entry('server', 'open', '2026-02-13T09:00:00Z');
+  clock().setOpen(accepted);
+  respond();
+  await hydrating;
+
+  assert.equal(clock().openEntry, accepted, 'hydrate clocked out a worker the server has on shift');
+});
+
+test('a later hydrate wins even when the earlier one answers last', async () => {
+  reset();
+  const server = entry('server', 'open', '2026-02-13T09:00:00Z');
+  // NetInfo->true and AppState->active both fire when a phone is unlocked in a dead zone.
+  let respondFirst;
+  setListEntries(() => new Promise((resolve) => (respondFirst = () => resolve([]))));
+  const first = clock().hydrateFromServer();
+  setListEntries(async () => [server]);
+  await clock().hydrateFromServer();
+
+  respondFirst();
+  await first;
+
+  assert.equal(clock().openEntry, server, 'a stale in-flight hydrate overwrote a newer answer');
+});
+
+test('setOpen clears pendingSince and a later hydrate still applies', async () => {
   reset();
   clock().setPending(entry('queued', 'open', '2026-02-13T09:00:00Z'));
   assert.notEqual(clock().pendingSince, null);
