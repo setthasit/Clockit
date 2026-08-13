@@ -121,22 +121,40 @@ const pingItem = (id, n) => ({
 
 const outbox = () => useOutboxStore.getState();
 
-function reset(items = []) {
-  resetCalls();
-  useOutboxStore.setState({items, needsAttention: []});
-}
-
 // No test below queues more than three items, so a fourth send means the drain is going round
-// again on something it should have removed. Asserting it here rather than after the flush is
-// what makes that fail in milliseconds: a drop that leaves its item queued spins `for(;;)`
-// forever, and the suite would otherwise hang until the runner's timeout kills it.
+// again on something it should have removed. Asserting it inside the responder rather than after
+// the flush is what makes that fail in milliseconds: any defect that leaves the head queued spins
+// `for(;;)` forever, and the flush promise then never settles — the suite would hang until the
+// runner kills it and report a *cancellation*, which is not a failure and is easy to miss.
+// So every responder in this file carries the ceiling, the default success one included.
 const MAX_SENDS = 4;
+
+const ceiling = () =>
+  assert.ok(calls.length <= MAX_SENDS, 'the drain re-sent an item it should have removed');
+
+const succeed = () =>
+  setResponder(async () => {
+    ceiling();
+    return {};
+  });
 
 const rejectWith = (status, code) =>
   setResponder(async () => {
-    assert.ok(calls.length <= MAX_SENDS, 'the drain re-sent an item it should have removed');
+    ceiling();
     throw new ApiError(status, code, `${code} (${status})`);
   });
+
+// The stub's own default responder has no ceiling (it cannot reach `assert`), so nothing in this
+// file may use it: go through here.
+function resetResponses() {
+  resetCalls();
+  succeed();
+}
+
+function reset(items = []) {
+  resetResponses();
+  useOutboxStore.setState({items, needsAttention: []});
+}
 
 // The classifier is the whole file in one table: retrying costs a duplicate the server dedupes,
 // dropping costs a worker their hours. 200/UNKNOWN is the case a 4xx/5xx if-chain misses — the
@@ -216,18 +234,25 @@ test('a non-ApiError from the request layer leaves the item queued and the guard
 
   // The finally on flush() has to clear inFlight even on a throw, or one bug wedges the queue
   // shut for the rest of the process and every later trigger silently no-ops.
-  setResponder(async () => ({}));
+  succeed();
   await outbox().flush();
   assert.deepEqual(outbox().items, [], 'a thrown drain left the flush guard stuck');
 });
 
 test('an item enqueued while a send is in flight is not removed with the one that finished', async () => {
-  // The removal reads fresh state and matches by key. Against the snapshot taken before the
-  // await — items.slice(1) — this clock-in would be dropped by the *success* path of the item
-  // ahead of it: queued, never sent, no attention record, no trace.
+  // What this pins is that the removal reads *fresh* state: written against the array captured
+  // before the await, this clock-in is dropped by the *success* path of the item ahead of it —
+  // queued, never sent, no attention record, no trace.
+  //
+  // It does not pin removal *by key*: `s.items.slice(1)` on fresh state passes this too, and the
+  // two are identical today, since enqueue appends and a rehydrate cannot land mid-drain past
+  // `await hydrated`. By-key earns its keep on the documented per-sub upgrade path (the store's
+  // docblock: setOptions + persist.rehydrate() while items are queued), where `merge` puts the
+  // stored items in *front* of the head and slice(1) would drop someone else's shift.
   reset([inItem('c-1')]);
   let enqueued = false;
   setResponder(async () => {
+    ceiling();
     if (!enqueued) {
       enqueued = true;
       outbox().enqueue(inItem('c-2'));
@@ -286,6 +311,9 @@ test('a retryable failure stops the drain instead of skipping ahead', async () =
 test('accepted items leave in order and the queue resumes where it stopped', async () => {
   reset([inItem('c-1'), outItem('close-1', 'c-1'), pingItem('p-1', 3)]);
   setResponder(async (kind) => {
+    // The ceiling is what makes this test *fail* rather than hang, and this is the test that pins
+    // the retryable `return`: `return` -> `continue` re-sends the parked clock-out forever.
+    ceiling();
     if (kind === 'clock-out') throw new ApiError(500, 'INTERNAL', 'boom');
     return {};
   });
@@ -395,7 +423,7 @@ test('a flush called before rehydration waits for the stored queue', async () =>
     KEY,
     JSON.stringify({state: {items: [inItem('stored')], needsAttention: []}, version: 0}),
   );
-  resetCalls();
+  resetResponses();
 
   const release = storage.blockReads();
   const {useOutboxStore: store} = await import(new URL('./outbox.ts?cold', import.meta.url).href);
@@ -420,7 +448,7 @@ test('an item queued during the rehydration window survives it', async () => {
     KEY,
     JSON.stringify({state: {items: [inItem('stored')], needsAttention: []}, version: 0}),
   );
-  resetCalls();
+  resetResponses();
 
   const release = storage.blockReads();
   const {useOutboxStore: store} = await import(new URL('./outbox.ts?window', import.meta.url).href);
@@ -444,7 +472,7 @@ test('an item queued during the rehydration window survives it', async () => {
 
 test('a storage read that never returns data still lets the queue work', async () => {
   storage.items.clear();
-  resetCalls();
+  resetResponses();
 
   const {useOutboxStore: store} = await import(new URL('./outbox.ts?empty', import.meta.url).href);
   store.getState().enqueue(inItem('c-1'));
@@ -463,7 +491,7 @@ test('a stored queue written by another version is carried across, not erased', 
     KEY,
     JSON.stringify({state: {items: [inItem('stored')], needsAttention: []}, version: 7}),
   );
-  resetCalls();
+  resetResponses();
 
   const {useOutboxStore: store} = await import(new URL('./outbox.ts?v7', import.meta.url).href);
   await settle();
@@ -489,7 +517,7 @@ test('a failed storage read leaves the stored queue on disk and still unblocks t
     KEY,
     JSON.stringify({state: {items: [inItem('stored')], needsAttention: []}, version: 0}),
   );
-  resetCalls();
+  resetResponses();
 
   storage.setRejecting(true);
   const {useOutboxStore: store} = await import(new URL('./outbox.ts?unreadable', import.meta.url).href);
@@ -524,7 +552,7 @@ test('the same item stored and in memory is merged once, not sent twice', async 
     KEY,
     JSON.stringify({state: {items: [inItem('dup')], needsAttention: []}, version: 0}),
   );
-  resetCalls();
+  resetResponses();
 
   const release = storage.blockReads();
   const {useOutboxStore: store} = await import(new URL('./outbox.ts?dup', import.meta.url).href);
@@ -537,4 +565,45 @@ test('the same item stored and in memory is merged once, not sent twice', async 
     ['dup'],
     'the merge left a duplicate that would be clocked in twice',
   );
+});
+
+test('signing out during the launch read empties the queue without wedging the flush', async () => {
+  // The two moving parts pull opposite ways, which is why clearForSignOut exists at all.
+  //
+  // setState alone leaves the blob on disk, and the in-flight rehydrate then merges the previous
+  // worker's clock-in back in *front* of everything and sends it under the new user's sub.
+  // clearStorage fixes that but bumps persist's hydrationVersion, which cancels every `.then` of
+  // the in-flight hydrate — onRehydrateStorage included — so markHydrated() is never called,
+  // `await hydrated` never resolves, and the promise `inFlight` caches never settles: every flush
+  // for the rest of the process is silently dead. Reachable on a plain launch-time 401, which is
+  // exactly the path that routes to sign-out.
+  storage.items.set(
+    KEY,
+    JSON.stringify({state: {items: [inItem('prev-user')], needsAttention: []}, version: 0}),
+  );
+  resetResponses();
+
+  const release = storage.blockReads();
+  const outboxModule = await import(new URL('./outbox.ts?signout', import.meta.url).href);
+  const {useOutboxStore: store, clearForSignOut} = outboxModule;
+  clearForSignOut();
+  release();
+  await settle();
+
+  assert.deepEqual(store.getState().items, [], 'the cancelled rehydrate resurrected the queue');
+  assert.equal(storage.items.get(KEY), undefined, 'the previous worker’s queue is still on disk');
+
+  store.getState().enqueue(inItem('next-user'));
+  const flushing = store.getState().flush();
+  await settle();
+  // Asserted before awaiting, deliberately: a wedged gate means this promise never settles at all,
+  // so awaiting first would turn a permanently dead queue into a runner timeout minutes later,
+  // reported as a cancellation rather than a failure.
+  assert.deepEqual(
+    calls.map((c) => c[1].client_id),
+    ['next-user'],
+    'sign-out during the launch read wedged the flush shut, or replayed the previous worker',
+  );
+  await flushing;
+  assert.deepEqual(store.getState().items, []);
 });

@@ -56,9 +56,13 @@ type OutboxState = {
    * a failed write (disk full, SQLite error, Android per-DB limit) leaves the item in memory only,
    * and the next kill loses it with no record anywhere — wider than the rehydration window, which
    * needs a kill within milliseconds, where this needs only a kill any time after the failure.
-   * Upgrade path: type it `Promise<void>` (persist's wrapped set already returns exactly that
-   * promise) and pin the cast with a test, once 6.4 has a reason to await durability — untested,
-   * the cast would resolve on nothing the day that internal changes, which is worse than the gap.
+   * Upgrade path: type it `Promise<void>` and return `set(...) as Promise<void>` — at runtime
+   * persist's wrapped set returns the storage write's promise, and inside this initializer zustand
+   * declares that set's return as `unknown` (persist.d.ts, `Pr = unknown`), so one cast reaches it.
+   * `unknown` is exactly the reason this stays a comment: zustand declares a return value and
+   * declares it unknowable, i.e. promises nothing about what it is. So the cast has to be pinned by
+   * a test the day it is written, once 6.4 has a reason to await durability — untested, it would
+   * resolve on nothing the day that value changes, which is worse than the gap.
    */
   enqueue(item: OutboxItem): void;
   flush(): Promise<void>;
@@ -78,9 +82,14 @@ type OutboxState = {
 //       after which every queued client_id and its original `at` are still acceptable inside
 //       MAX_QUEUED_AGE. Dropping would destroy the *whole* queue in one pass — the head drops,
 //       `continue` hands the next item the identical 401 — which is the exact harm session.ts
-//       maps raw iOS Auth0 codes to avoid. Retrying is self-limiting: onUnauthorized() has
-//       already routed the user to sign-in, the `return` below costs one 401 per trigger rather
-//       than N, and items too old to matter age out to QUEUED_TOO_OLD (422, a drop).
+//       maps raw iOS Auth0 codes to avoid. The cost is bounded per trigger, not per item:
+//       onUnauthorized() has already routed the user to sign-in and the `return` below spends one
+//       401, not N. It is not bounded in *time*, and only the clock-in ages out — ValidateFix
+//       drops one past MaxQueuedAge as QUEUED_TOO_OLD (422), while ValidateClose widens that
+//       ceiling to MaxInt64 and pingFixes checks shape only (entry/geo.go, entry/handler.go), so a
+//       parked close or ping batch waits indefinitely. That is the server's deliberate choice
+//       rather than rot: "refusing a late close can only strand the shift open", so a close that
+//       waits out a dead session still ends in acceptance, which is the outcome we want here.
 //   429 RATE_LIMITED. Every route here is limited per sub per path at 30/min and a FIFO flush
 //       after an offline shift bursts straight past that — permanent would drop real data.
 //   >=500 the server's problem, not the payload's.
@@ -180,17 +189,17 @@ function uniqueByClientId<T extends {clientId: string}>(xs: T[]): T[] {
  * flush with hydrateFromServer(), which is the authoritative reconcile for both outcomes —
  * an accepted replay comes back as the open entry, a dropped one as no entry (the revert). Calling
  * setOpen() per item from here would duplicate that one moment early and reintroduce exactly the
- * pill flicker clock.ts's second ponytail note describes. **This hands 9.1 one obligation**:
+ * pill flicker clock.ts's second ponytail note describes. **This hands 9.1 two obligations**:
  * hydrateFromServer() does not touch `pendingSince`, so 9.1 must clear it after a drain (setOpen
- * with the hydrated entry) or the "waiting for connection" pill sticks forever.
+ * with the hydrated entry) or the "waiting for connection" pill sticks forever. And 9.1 must not
+ * trigger a flush on session-state change: onUnauthorized() calls session.clear(), which writes a
+ * fresh object on *every* 401 — harmless once per trigger, but a 401 here would then re-trigger
+ * the flush that produced it, and the queue survives 401s by design, so it would not settle.
  *
  * **And it hands 8.1 one, which is a correctness rule, not polish**: the queue is stored under a
  * single device-wide key and is therefore NOT scoped to a user, so items outlive a sign-out.
- * Sign out must clear both halves, in this order:
- *
- *     useOutboxStore.setState({items: [], needsAttention: []});  // in memory
- *     await useOutboxStore.persist.clearStorage();               // on disk (setState alone
- *                                                                // rewrites the key it clears)
+ * Sign out must call `clearForSignOut()` below — call it, do not open-code it: the order and the
+ * hydration gate are both easy to get wrong, in ways that fail silently (see its own comment).
  *
  * Skip it and the next person to sign in on a shared phone — the shift-work case this app is for —
  * flushes the previous worker's queued clock-in against their own Auth0 sub on the first trigger:
@@ -198,10 +207,16 @@ function uniqueByClientId<T extends {clientId: string}>(xs: T[]): T[] {
  * Note this queue deliberately survives a 401 (see `retryable`), so the window is a real one and
  * not a race: the items are still there, waiting, when the next user arrives.
  *
+ * **That clear destroys unsent hours, so 8.1 owes the worker a choice before it**: a non-empty
+ * `items` is captured shifts no server has seen. 8.1 must `await flush()` first, or warn ("N
+ * unsynced actions will be lost", plan §8.1) and let the worker cancel. Clearing unconditionally
+ * loses a queued shift silently — the same harm this file survives a dead session to prevent,
+ * arriving through a different door.
+ *
  * ponytail: one global storage key, and an obligation delegated rather than enforced. Ceiling: a
- * sign-out path that forgets the two lines above reintroduces the leak, and nothing here can fail
- * loudly when it does. Upgrade path: per-sub scoping, which cannot be done at module scope because
- * no `sub` exists yet — the session store would have to call
+ * sign-out path that never calls clearForSignOut() reintroduces the leak, and nothing here can
+ * fail loudly when it does. Upgrade path: per-sub scoping, which cannot be done at module scope
+ * because no `sub` exists yet — the session store would have to call
  * `useOutboxStore.persist.setOptions({name: `clockit-outbox-${sub}`})` then `.rehydrate()` on every
  * sign-in, which also needs this file's `hydrated` promise to become re-armable.
  */
@@ -265,10 +280,16 @@ export const useOutboxStore = create<OutboxState>()(
       // `merge` undefined — and the re-persist below would then write the resulting empty queue
       // straight over it. So without these two lines the *next* person to bump this number
       // silently destroys every queued shift on every phone, once, with nothing to roll back to.
-      // Passing the payload through costs nothing today and makes that bump survivable; `merge`
-      // re-narrows the value defensively, so the cast asserts nothing it trusts.
+      // Passing the payload through costs nothing today and hands the old blob to `merge` instead
+      // of undefined. It is not itself a migration: a bump that really changes the shape still
+      // reaches `merge`, which keeps only what it can read, and persist then writes that result
+      // back over the blob — so whoever bumps this number still owes a real migrate. This only
+      // stops the *default* path from wiping every phone by omission.
+      //
+      // Partial, not OutboxState: the stored blob is partialize's output and carries no actions.
+      // `merge` re-narrows it anyway, so the cast asserts nothing it trusts.
       version: 0,
-      migrate: (persisted) => persisted as OutboxState,
+      migrate: (persisted) => persisted as Partial<OutboxState>,
       // The default merge lets the stored state *replace* what is in memory (persist calls
       // set(state, true)), which here would silently eat a clock-in tapped during the rehydration
       // window — the launch-in-a-dead-zone case. Concatenated instead, stored first so FIFO age
@@ -285,9 +306,10 @@ export const useOutboxStore = create<OutboxState>()(
         };
       },
       // persist calls this callback on a read *error* as well as on success (ui.test.js pins that).
-      // markHydrated() is therefore deliberately outside the guard and must stay there: it is the
-      // only thing that releases the flush, so gating it would leave a phone whose storage failed
-      // to read once unable to send anything, ever.
+      // markHydrated() is therefore deliberately outside the guard and must stay there: on a normal
+      // launch this is the only thing that releases the flush (clearForSignOut is the sole other
+      // caller), so gating it would leave a phone whose storage failed to read once unable to send
+      // anything, ever.
       onRehydrateStorage: () => (_state, error) => {
         // persist writes storage on every set *except* the merge itself, so an item recovered by
         // the concat above would sit in memory only — and an enqueue during the rehydration window
@@ -305,3 +327,30 @@ export const useOutboxStore = create<OutboxState>()(
     },
   ),
 );
+
+/**
+ * 8.1's sign-out must call this. It is three lines and every one of them is load-bearing in an
+ * order that is not obvious, which is why it lives here and not in the screen:
+ *
+ *  - setState first, clearStorage second. persist writes storage on every set, so clearing the
+ *    key first would leave the setState's write behind and the queue back on disk.
+ *  - setState is not enough on its own. The launch rehydrate's `merge` concatenates *stored*
+ *    items in front of memory, so leaving the blob there lets it resurrect the previous worker's
+ *    clock-in and send it under the new user's sub — the exact leak this exists to close.
+ *  - markHydrated last, and it is the reason a screen cannot open-code this. clearStorage() bumps
+ *    persist's internal hydrationVersion, and every `.then` in its in-flight hydrate bails on that
+ *    mismatch — *including* the one that calls onRehydrateStorage. Sign out during the launch read
+ *    (onUnauthorized -> a 401 at launch routes straight here) and markHydrated is never called, so
+ *    `await hydrated` never resolves, so the promise `inFlight` caches never settles: every flush
+ *    for the rest of the process is dead, silently, with items piling up on disk and no error
+ *    anywhere. Resolving an already-resolved promise is a no-op, so calling it here is free
+ *    otherwise.
+ *
+ * Note this does not sign out of anything, and it destroys unsent hours — see the store's docblock
+ * for what 8.1 owes the worker before calling it.
+ */
+export function clearForSignOut(): void {
+  useOutboxStore.setState({items: [], needsAttention: []});
+  useOutboxStore.persist.clearStorage();
+  markHydrated();
+}
