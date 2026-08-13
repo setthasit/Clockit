@@ -9,7 +9,6 @@ import {
 import { WebAuthError, WebAuthErrorCodes, useAuth0 } from "react-native-auth0";
 
 import { theme } from "@/lib/theme";
-import { useSessionStore } from "@/stores/session";
 
 // Both are spelled out rather than left to the SDK defaults (which are `openid profile email`
 // and no audience): offline_access is what mints the refresh token every silent renew in
@@ -20,7 +19,6 @@ const AUDIENCE = process.env.EXPO_PUBLIC_AUTH0_AUDIENCE;
 
 export default function SignIn() {
   const { authorize, resumeSession } = useAuth0();
-  const setToken = useSessionStore((s) => s.setToken);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,8 +47,9 @@ export default function SignIn() {
       // Universal Login renders Google/Apple/Facebook/password itself — the app never sees a
       // credential. On success Auth0Provider stores the credentials and sets `user`, which is
       // what flips the gate in _layout.tsx; loading `me` and navigating are its job, not ours.
-      const { accessToken } = await authorize({ audience: AUDIENCE, scope: SCOPE });
-      setToken(accessToken);
+      // The returned credentials are dropped on purpose: nothing reads store.accessToken, and
+      // getAccessToken() sets it from the credentials manager on every API call anyway.
+      await authorize({ audience: AUDIENCE, scope: SCOPE });
     } catch (e) {
       // Never rendered or logged: an Auth0 error can carry session detail, and a cancel is the
       // user's own decision — re-showing the screen unchanged is the whole feedback it needs.

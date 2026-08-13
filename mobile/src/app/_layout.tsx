@@ -16,6 +16,21 @@ import { theme } from "@/lib/theme";
 import { auth0Config, useSessionStore } from "@/stores/session";
 
 export default function RootLayout() {
+  // Auth0Provider builds its client *during render* (hooks/Auth0Provider.tsx:56) and the Auth0
+  // constructor rejects an empty domain/clientId (core/utils/validation.ts), so a build missing
+  // either env var would crash the root before any error UI exists. stores/session.ts made its own
+  // client lazy for exactly this reason; the provider needs the guard instead.
+  if (!auth0Config.domain || !auth0Config.clientId) {
+    return (
+      <View style={styles.screen}>
+        <Text accessibilityRole="alert" style={styles.message}>
+          This build is missing EXPO_PUBLIC_AUTH0_DOMAIN or
+          EXPO_PUBLIC_AUTH0_CLIENT_ID and cannot sign in.
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <Auth0Provider {...auth0Config}>
       <Gate />
@@ -27,19 +42,44 @@ export default function RootLayout() {
  * Decides what a launch lands on. Its own component because useAuth0() only reads a provider
  * mounted above it.
  *
- * `user` — not the store's accessToken — is the session flag: Auth0Provider restores credentials
- * itself at mount (hooks/Auth0Provider.tsx initialize()) and reports that through isLoading/user,
- * while accessToken stays null until something actually calls the API.
+ * The session flag is "credentials are still in the keychain", not `user`. Auth0Provider's
+ * initialize() (hooks/Auth0Provider.tsx:97-109) only sets `user` after getCredentials(), which
+ * *renews over the network* once the access token has expired — offline that renew throws and it
+ * dispatches INITIALIZED with user:null, making a transport failure indistinguishable from having
+ * no session. Since authorize() also needs network, a `!!user` gate would strand a worker at a
+ * sign-in screen they cannot complete. hasValidCredentials() is a local keychain check
+ * (canRenew() || hasValid(minTTL), ios/NativeBridge.swift:247-249), so it stays true offline and
+ * turns false as soon as clearCredentials() wipes them — which is why `user` is in the effect's
+ * deps: a 401-driven clear has to re-run the check. `user` is still OR'd in so a fresh login flips
+ * the gate on the same tick.
+ *
+ * The store's accessToken is never the flag: it stays null until something calls the API.
  */
 function Gate() {
-  const { user, isLoading, clearCredentials } = useAuth0();
+  const { user, isLoading, clearCredentials, hasValidCredentials } = useAuth0();
   const me = useSessionStore((s) => s.me);
   const loadMe = useSessionStore((s) => s.loadMe);
+  const [hasCreds, setHasCreds] = useState<boolean | null>(null);
   const [meError, setMeError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const inFlight = useRef(false);
 
-  const signedIn = !!user;
+  useEffect(() => {
+    // Waiting for isLoading keeps this off the mid-restore keychain state.
+    if (isLoading) return;
+    // `cancelled` is not cosmetic: without it a check started before clearCredentials() can
+    // resolve `true` after one started later resolved `false`, leaving the gate stuck on a
+    // session that no longer exists with nothing left to re-trigger it.
+    let cancelled = false;
+    hasValidCredentials()
+      .then((ok) => !cancelled && setHasCreds(ok))
+      .catch(() => !cancelled && setHasCreds(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoading, user, hasValidCredentials]);
+
+  const signedIn = !!user || hasCreds === true;
 
   // `me` is loaded here rather than per screen so every screen below can assume it: memberships
   // drive the clock, history and profile tabs alike, and one loader means one retry path.
@@ -73,7 +113,13 @@ function Gate() {
       });
   }, [signedIn, me, attempt, loadMe, clearCredentials]);
 
-  if (isLoading || (signedIn && !me && !meError)) {
+  // `!user && hasCreds === null` is the window where the keychain check is still in flight: without
+  // it the gate would render sign-in for a frame before flipping back.
+  if (
+    isLoading ||
+    (!user && hasCreds === null) ||
+    (signedIn && !me && !meError)
+  ) {
     return (
       <View style={styles.screen}>
         <ActivityIndicator color={theme.surface} />
@@ -102,7 +148,10 @@ function Gate() {
   // StackRouter.getStateForRouteNamesChange drops every route whose name is no longer registered
   // and re-seeds the stack with routeNames[0], so the screens on the wrong side of the guard leave
   // no history entry to swipe back into — a router.replace() cannot promise that as strongly.
-  // Exactly one branch is ever non-empty, so the re-seeded route is never ambiguous.
+  // The re-seeded route is routeNames[0], and getSortedChildren (expo-router useScreens.js) keeps
+  // declaration order: the FIRST <Stack.Screen> in each branch below is that branch's landing
+  // route. Do not reorder them — moving "permissions" above "(tabs)" would land every sign-in on
+  // the Location screen with no history entry to escape via.
   //
   // ponytail: auth half only. Task 4.2 adds the location branch here (session but the explainer
   // was never seen → /permissions); it needs 4.2's persisted "explainer seen" flag, because a user
