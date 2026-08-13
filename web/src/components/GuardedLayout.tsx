@@ -14,8 +14,12 @@ import type {Employer} from '../lib/types';
 export function GuardedLayout() {
   const {isLoading, isAuthenticated, getAccessTokenSilently, loginWithRedirect} = useAuth0();
 
-  // Set during render, not in an effect: child effects run before the parent's, so an
-  // effect here would let a child's first request go out without a token.
+  // Set during render, not in an effect: it must be in place before this component's
+  // own fetch effect below. No child can beat it today (<Outlet/> is unreachable until
+  // that fetch resolves), but once task 3.1 lifts `employers` into EmployerContext a
+  // child may mount in the same first commit, and child effects run before the parent's.
+  // api() fails closed, so getting this wrong throws loudly instead of sending an
+  // unauthenticated request.
   setApiAuth({
     getToken: () => getAccessTokenSilently(),
     onUnauthorized: () => void loginWithRedirect(),
@@ -23,7 +27,7 @@ export function GuardedLayout() {
 
   const [employers, setEmployers] = useState<Employer[] | 'error' | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const {pathname} = useLocation();
+  const {pathname, search} = useLocation();
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -51,7 +55,10 @@ export function GuardedLayout() {
     );
   }
 
-  if (!isAuthenticated) return <Navigate to="/sign-in" replace />;
+  // Carry the wanted path so sign-in can hand it to Auth0 as appState.returnTo.
+  if (!isAuthenticated) {
+    return <Navigate to="/sign-in" replace state={{returnTo: pathname + search}} />;
+  }
 
   if (employers === 'error') {
     return (
@@ -85,6 +92,9 @@ export function GuardedLayout() {
   }
 
   // Onboarding itself renders with zero employers — redirecting from it would loop.
+  // ponytail: this bounces task 3.2 back to /onboarding after a successful create,
+  // because `employers` is still the [] fetched at boot. 3.2 needs a refresh path;
+  // 3.1's EmployerContext is where it belongs.
   if (employers.length === 0 && pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />;
   }

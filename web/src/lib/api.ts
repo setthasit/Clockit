@@ -35,27 +35,33 @@ export function setApiAuth(handlers: {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  // Fail closed: every backend route requires auth, so a request issued before
+  // setApiAuth() is a wiring bug, not an anonymous call.
+  if (!getToken) throw new Error('api() called before setApiAuth()');
+
   const headers = new Headers(init?.headers);
-  if (getToken) {
-    try {
-      headers.set('Authorization', `Bearer ${await getToken()}`);
-    } catch {
-      // A lapsed SSO session rejects here (login_required) with no HTTP 401 ever
-      // sent, so this is the only path back to sign-in. The caught error is not
-      // logged: it can carry token and session detail.
-      onUnauthorized?.();
-      throw new ApiError(401, 'UNAUTHENTICATED', 'Your session expired. Please sign in again.');
-    }
+  try {
+    headers.set('Authorization', `Bearer ${await getToken()}`);
+  } catch {
+    // A lapsed SSO session rejects here (login_required) with no HTTP 401 ever
+    // sent, so this is the only path back to sign-in. The caught error is not
+    // logged: it can carry token and session detail.
+    onUnauthorized?.();
+    throw new ApiError(401, 'UNAUTHENTICATED', 'Your session expired. Please sign in again.');
   }
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
   const res = await fetch(`${BASE_URL}${path}`, {...init, headers});
   const text = await res.text();
 
-  if (!res.ok) {
-    if (res.status === 401) onUnauthorized?.();
-    throw toApiError(res.status, text);
-  }
+  // ponytail: no onUnauthorized() on an HTTP 401. getToken() above just succeeded, so
+  // the backend rejecting that token is a config fault (audience, issuer, clock skew)
+  // that re-authenticating cannot fix — and with a live Auth0 SSO session the redirect
+  // returns instantly with a fresh code, looping forever with no diagnostics. Throwing
+  // surfaces the error Banner instead. Deviates from plan §1.2; if a case ever appears
+  // where a 401 really is curable by re-login, gate the redirect on a sessionStorage
+  // marker so the one-shot survives the reload.
+  if (!res.ok) throw toApiError(res.status, text);
 
   // 204s (member PATCH/DELETE) and any other empty body have nothing to parse.
   if (!text) return undefined as T;
