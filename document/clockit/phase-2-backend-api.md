@@ -42,7 +42,7 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 5.6: Tests
 - [ ] Task 6: Tip domain
   - [x] 6.1: `split.go` (largest-remainder split) + unit tests
-  - [ ] 6.2: Tips PUT/GET + report endpoint
+  - [x] 6.2: Tips PUT/GET + report endpoint
   - [ ] 6.3: Tests
 - [ ] Task 7: Custom telemetry
   - [ ] 7.1: Domain counters + span attributes
