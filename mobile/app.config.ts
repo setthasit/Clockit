@@ -7,7 +7,8 @@ const config: ExpoConfig = {
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: "clockit",
-  userInterfaceStyle: "automatic",
+  // theme.ts is a single light palette, so dark native chrome would clash.
+  userInterfaceStyle: "light",
   ios: {
     bundleIdentifier: "ai.duckos.clockit",
     icon: "./assets/expo.icon",
@@ -31,7 +32,7 @@ const config: ExpoConfig = {
     [
       "expo-splash-screen",
       {
-        backgroundColor: "#208AEF",
+        backgroundColor: "#00286E",
         image: "./assets/images/splash-icon.png",
         imageWidth: 76,
       },
@@ -46,6 +47,10 @@ const config: ExpoConfig = {
           "ClockIt uses your location when you clock in or out to confirm you are at your workplace.",
         locationAlwaysAndWhenInUsePermission:
           "ClockIt records your location during an active shift, from clock-in until clock-out, so your employer can verify hours worked. It never tracks you off shift.",
+        locationAlwaysPermission:
+          "ClockIt records your location during an active shift, from clock-in until clock-out, so your employer can verify hours worked. It never tracks you off shift.",
+        // ClockIt never calls the motion activity APIs; false deletes the key the plugin adds by default.
+        motionUsagePermission: false,
         // Background keys land now so phase 5 (on-shift pings) needs no new native build.
         isIosBackgroundLocationEnabled: true,
         isAndroidBackgroundLocationEnabled: true,
