@@ -1,5 +1,6 @@
 import {Navigate, useLocation} from 'react-router';
 import {useAuth0} from '@auth0/auth0-react';
+import {Banner} from '@astryxdesign/core/Banner';
 import {Button} from '@astryxdesign/core/Button';
 import {Center} from '@astryxdesign/core/Center';
 import {VStack} from '@astryxdesign/core/Layout';
@@ -7,7 +8,7 @@ import {Spinner} from '@astryxdesign/core/Spinner';
 import {Heading, Text} from '@astryxdesign/core/Text';
 
 export function SignInRoute() {
-  const {isLoading, isAuthenticated, loginWithRedirect} = useAuth0();
+  const {isLoading, isAuthenticated, error, loginWithRedirect} = useAuth0();
 
   // The guard puts the path the user asked for in location state; the SDK's default
   // onRedirectCallback navigates to appState.returnTo once Auth0 comes back.
@@ -31,6 +32,12 @@ export function SignInRoute() {
         <Text type="body" color="secondary">
           Shifts, hours and payroll for your crew — clocked from the job site.
         </Text>
+        {/* A tenant misconfiguration (missing client grant, wrong audience, no
+            offline_access) comes back as ?error= on the redirect, which the provider
+            turns into this error instead of a session — so the click looks like it did
+            nothing. error.message is Auth0's error_description: developer-facing text
+            about the tenant, carrying no token, session id or PII. */}
+        {error && <Banner status="error" title="Sign-in failed" description={error.message} />}
         <Button
           label="Sign in"
           variant="primary"
