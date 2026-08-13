@@ -20,6 +20,18 @@ test('toCents converts dollars without losing a penny to float error', () => {
   expect(toCents(18.07)).toBe(1807);
   expect(toCents(5.29)).toBe(529);
 
+  // Half a cent rounds up, and the sign survives the trip.
+  expect(toCents(0.005)).toBe(1);
+  expect(toCents(-0.01)).toBe(-1);
+
+  // The backend caps rates at 100_000_000 cents; the ceiling itself must convert exactly.
+  expect(toCents(1_000_000)).toBe(100_000_000);
+  expect(toCents(999_999.99)).toBe(99_999_999);
+
+  // Math.round returns -0 just below zero. Not special-cased because it never reaches
+  // the backend as one — asserted on the wire form, since -0 is not 0 to Object.is.
+  expect(JSON.stringify({hourly_rate_cents: toCents(-0.004)})).toBe('{"hourly_rate_cents":0}');
+
   expect(toCents(Number.NaN)).toBeNull();
   expect(toCents(Number.POSITIVE_INFINITY)).toBeNull();
 

@@ -102,7 +102,11 @@ export function Shell() {
             </SideNavSection>
           </SideNav>
         }>
-        <Outlet />
+        {/* Not a no-op: switching employers remounts the route, so every piece of its
+            state — loaded rows, in-flight optimistic edits, error banners, open dialogs —
+            resets together. Without it a route has to tag each one with the employer it
+            belongs to, and anything it forgets to tag writes A's data against B. */}
+        <Outlet key={employer.id} />
       </AppShell>
     </LinkProvider>
   );

@@ -8,7 +8,6 @@ import {DropdownMenu} from '@astryxdesign/core/DropdownMenu';
 import {EmptyState} from '@astryxdesign/core/EmptyState';
 import {HStack, Layout, LayoutContent, LayoutFooter, VStack} from '@astryxdesign/core/Layout';
 import {NumberInput} from '@astryxdesign/core/NumberInput';
-import {Section} from '@astryxdesign/core/Section';
 import {Spinner} from '@astryxdesign/core/Spinner';
 import {StatusDot} from '@astryxdesign/core/StatusDot';
 import {pixel, proportional, Table, type TableColumn} from '@astryxdesign/core/Table';
@@ -29,43 +28,30 @@ const STATUS: Record<MemberStatus, {variant: 'accent' | 'success' | 'neutral'; l
 // The backend still validates: this only keeps the arrows from walking past it.
 const MAX_RATE_DOLLARS = 1_000_000;
 
-// Only for the invite paths: there the backend's own message ("email must be a valid
-// address", "already a member of this employer") describes what the user just typed.
-// The other codes it can return — "not found", "too many requests" — are wire-level
-// diagnostics, so those handlers below say what failed in their own words instead.
-function errorText(e: unknown, fallback: string): string {
-  return e instanceof ApiError ? e.message : fallback;
-}
-
 export function EmployeesRoute() {
   const employer = useActiveEmployer();
 
-  // Tagged with the employer it was fetched for rather than cleared when that changes:
-  // resetting inside the effect is a cascading render, and until it ran the table would
-  // show one frame of the previous employer's rates.
-  const [loaded, setLoaded] = useState<{employerId: string; members: Member[] | 'error'} | null>(
-    null,
-  );
+  // No employer tag on any of this state: Shell keys <Outlet/> by employer id, so a
+  // switch remounts the route and clears all of it at once.
+  const [loaded, setLoaded] = useState<Member[] | 'error' | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<{id: string; dollars: number | null} | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<Member | null>(null);
 
-  // Anything but this employer's own list reads as loading.
-  const result = loaded?.employerId === employer.id ? loaded.members : null;
-  const members = result === 'error' ? null : result;
-  const loadFailed = result === 'error';
+  const members = loaded === 'error' ? null : loaded;
+  const loadFailed = loaded === 'error';
 
   useEffect(() => {
     let cancelled = false;
 
     api<{members: Member[]}>(`/v1/employers/${employer.id}/members`)
       .then((data) => {
-        if (!cancelled) setLoaded({employerId: employer.id, members: data.members});
+        if (!cancelled) setLoaded(data.members);
       })
       .catch(() => {
-        if (!cancelled) setLoaded({employerId: employer.id, members: 'error'});
+        if (!cancelled) setLoaded('error');
       });
 
     return () => {
@@ -74,17 +60,14 @@ export function EmployeesRoute() {
   }, [employer.id, attempt]);
 
   const updateMembers = (update: (list: Member[]) => Member[]) =>
-    setLoaded((prev) =>
-      prev && prev.members !== 'error' ? {...prev, members: update(prev.members)} : prev,
-    );
+    setLoaded((prev) => (prev && prev !== 'error' ? update(prev) : prev));
 
   const patchMember = (id: string, patch: Partial<Member>) =>
     updateMembers((list) => list.map((m) => (m.id === id ? {...m, ...patch} : m)));
 
   const commitRate = async (member: Member, dollars: number | null) => {
     const value = dollars === null ? null : toCents(dollars);
-    // Enter commits, and the blur that follows commits again — but by then the optimistic
-    // update has landed on `member`, so the repeat is a no-op instead of a second PATCH.
+    // Opening the editor and leaving without a change is not a write.
     if (value === null || value === member.hourly_rate_cents) return;
 
     const previous = member.hourly_rate_cents;
@@ -97,7 +80,15 @@ export function EmployeesRoute() {
         body: JSON.stringify({hourly_rate_cents: value}),
       });
     } catch {
-      patchMember(member.id, {hourly_rate_cents: previous});
+      // A later edit to the same row may have landed while this was in flight; rolling
+      // back then would overwrite a value the server has and this request never wrote.
+      updateMembers((list) =>
+        list.map((m) =>
+          m.id === member.id && m.hourly_rate_cents === value
+            ? {...m, hourly_rate_cents: previous}
+            : m,
+        ),
+      );
       setError('Could not save that rate. Try again.');
     }
   };
@@ -135,8 +126,11 @@ export function EmployeesRoute() {
     setError(null);
     try {
       await invite(member.email);
-    } catch (e) {
-      setError(errorText(e, 'Could not re-invite that employee. Try again.'));
+    } catch {
+      // No backend message here: a re-invite address comes from the row, not from
+      // something the user just typed, so "not found" or "too many requests" would be
+      // wire diagnostics bannered over the page.
+      setError('Could not re-invite that employee. Try again.');
     }
   };
 
@@ -165,9 +159,20 @@ export function EmployeesRoute() {
           hasAutoFocus
           value={edit.dollars}
           onChange={(dollars) => setEdit({id: member.id, dollars})}
-          onEnter={() => void commitRate(member, edit.dollars)}
-          onBlur={() => {
+          onEnter={() => {
             void commitRate(member, edit.dollars);
+            setEdit(null);
+          }}
+          // Escape is the way out of an inline money editor: closing without committing.
+          // Unmounting a focused node fires no focusout, so onBlur does not run after it.
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setEdit(null);
+          }}
+          onBlur={(e) => {
+            // NumberInput reports no change when the field is emptied, so `edit.dollars`
+            // still holds the last number typed. The event carries what is actually on
+            // screen, and an empty field on the way out is a cancel, not a rate of that.
+            if (e.target.value.trim() !== '') void commitRate(member, edit.dollars);
             setEdit(null);
           }}
         />
@@ -248,64 +253,68 @@ export function EmployeesRoute() {
   const removed = members?.filter((m) => m.status === 'removed') ?? [];
 
   return (
-    // padding={0}: AppShell already insets the content region, and the tables below are
-    // meant to run edge to edge inside it.
-    <Section padding={0} variant="transparent">
-      <VStack gap={5}>
-        <HStack gap={4} vAlign="center" hAlign="between">
-          <VStack gap={1}>
-            <Heading level={1}>Employees</Heading>
-            <Text type="body" color="secondary">
-              Invite your crew, set what each of them earns, and remove anyone who has left.
-            </Text>
-          </VStack>
-          <Button label="Add employee" variant="primary" onClick={() => setIsAdding(true)} />
-        </HStack>
+    // AppShell already insets the content region, and the tables run edge to edge inside
+    // it, so this needs no surface of its own.
+    <VStack gap={5}>
+      <HStack gap={4} vAlign="center" hAlign="between">
+        <VStack gap={1}>
+          <Heading level={1}>Employees</Heading>
+          <Text type="body" color="secondary">
+            Invite your crew, set what each of them earns, and remove anyone who has left.
+          </Text>
+        </VStack>
+        <Button label="Add employee" variant="primary" onClick={() => setIsAdding(true)} />
+      </HStack>
 
-        {error && <Banner status="error" title={error} />}
+      {error && <Banner status="error" title={error} />}
 
-        {loadFailed && (
-          <Banner
-            status="error"
-            title="Could not load your employees"
-            description="Check your connection and try again."
-            endContent={
-              <Button
-                label="Retry"
-                variant="secondary"
-                size="sm"
-                onClick={() => setAttempt((n) => n + 1)}
-              />
-            }
-          />
-        )}
+      {loadFailed && (
+        <Banner
+          status="error"
+          title="Could not load your employees"
+          description="Check your connection and try again."
+          endContent={
+            <Button
+              label="Retry"
+              variant="secondary"
+              size="sm"
+              // Back to the spinner: leaving the banner up until the retry resolves
+              // reads as a dead button.
+              onClick={() => {
+                setLoaded(null);
+                setAttempt((n) => n + 1);
+              }}
+            />
+          }
+        />
+      )}
 
-        {!loadFailed && !members && (
-          <Center padding={10}>
-            <Spinner size="lg" />
-          </Center>
-        )}
+      {!loadFailed && !members && (
+        <Center padding={10}>
+          <Spinner size="lg" />
+        </Center>
+      )}
 
-        {members?.length === 0 && (
-          <EmptyState
-            title="Add your first employee"
-            description="Invite someone by email. They can clock in as soon as they sign in on their phone."
-            actions={
-              <Button label="Add employee" variant="primary" onClick={() => setIsAdding(true)} />
-            }
-          />
-        )}
+      {members?.length === 0 && (
+        <EmptyState
+          title="Add your first employee"
+          description="Invite someone by email. They can clock in as soon as they sign in on their phone."
+          actions={
+            <Button label="Add employee" variant="primary" onClick={() => setIsAdding(true)} />
+          }
+        />
+      )}
 
-        {live.length > 0 && <Table data={live} columns={columns} idKey="id" hasHover />}
+      {live.length > 0 && <Table data={live} columns={columns} idKey="id" hasHover />}
 
-        {removed.length > 0 && (
-          <VStack gap={2}>
-            <Heading level={3}>Removed</Heading>
-            <Table data={removed} columns={columns} idKey="id" />
-          </VStack>
-        )}
-      </VStack>
+      {removed.length > 0 && (
+        <VStack gap={2}>
+          <Heading level={3}>Removed</Heading>
+          <Table data={removed} columns={columns} idKey="id" />
+        </VStack>
+      )}
 
+      {/* Both dialogs are native <dialog> in the top layer, so they take no space here. */}
       {isAdding && <AddEmployeeDialog onClose={() => setIsAdding(false)} onInvite={invite} />}
 
       {pendingRemoval && (
@@ -318,7 +327,7 @@ export function EmployeesRoute() {
           onAction={() => void removeMember(pendingRemoval)}
         />
       )}
-    </Section>
+    </VStack>
   );
 }
 
@@ -345,8 +354,9 @@ function AddEmployeeDialog({
       onClose();
     } catch (e) {
       // ALREADY_MEMBER and a malformed address both belong on the field that caused
-      // them, not on the page behind the dialog.
-      setError(errorText(e, 'Could not send that invitation. Try again.'));
+      // them, not on the page behind the dialog — and here the backend's own message
+      // ("already a member of this employer") describes what the user just typed.
+      setError(e instanceof ApiError ? e.message : 'Could not send that invitation. Try again.');
     }
   };
 
@@ -361,7 +371,12 @@ function AddEmployeeDialog({
               label="Email"
               description="They see the invitation the first time they sign in."
               value={email}
-              onChange={setEmail}
+              // Clear as they retype: an ALREADY_MEMBER hanging off the field they are
+              // correcting reads as if the correction is wrong too.
+              onChange={(value) => {
+                setEmail(value);
+                setError(null);
+              }}
               placeholder="crew@example.com"
               hasAutoFocus
               isRequired
