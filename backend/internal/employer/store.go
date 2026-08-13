@@ -91,6 +91,38 @@ func (s *Store) GetOwned(ctx context.Context, employerID, ownerUserID bson.Objec
 	return &e, nil
 }
 
+// Get loads an employer without an ownership check: callers on the member side
+// (clock-in, tips report) authorize through ActiveMembership instead.
+func (s *Store) Get(ctx context.Context, employerID bson.ObjectID) (*Employer, error) {
+	var e Employer
+	err := s.employers.FindOne(ctx, bson.M{"_id": employerID}).Decode(&e)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// ActiveMembership is the employee-side authorization gate: ErrNotFound when the
+// user holds no active membership, which callers report as NOT_MEMBER.
+func (s *Store) ActiveMembership(ctx context.Context, employerID, userID bson.ObjectID) (*Membership, error) {
+	var m Membership
+	err := s.memberships.FindOne(ctx, bson.M{
+		"employer_id": employerID,
+		"user_id":     userID,
+		"status":      statusActive,
+	}).Decode(&m)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 // Update applies the fields that were sent; a new anchor is re-sealed with the
 // employer's existing DEK. Nil fields are left untouched.
 func (s *Store) Update(ctx context.Context, employerID, ownerUserID bson.ObjectID, name, timezone *string, anchor *LatLng) error {
