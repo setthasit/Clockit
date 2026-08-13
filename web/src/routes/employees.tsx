@@ -164,15 +164,21 @@ export function EmployeesRoute() {
             setEdit(null);
           }}
           // Escape is the way out of an inline money editor: closing without committing.
-          // Unmounting a focused node fires no focusout, so onBlur does not run after it.
+          // Removing a focused node does dispatch focusout, but React does not deliver it to an
+          // unmounted fiber — so the onBlur below cannot fire behind the close and commit twice.
           onKeyDown={(e) => {
             if (e.key === 'Escape') setEdit(null);
           }}
           onBlur={(e) => {
-            // NumberInput reports no change when the field is emptied, so `edit.dollars`
-            // still holds the last number typed. The event carries what is actually on
-            // screen, and an empty field on the way out is a cancel, not a rate of that.
-            if (e.target.value.trim() !== '') void commitRate(member, edit.dollars);
+            // NumberInput reports no change when the field is emptied or out of range, so
+            // `edit.dollars` still holds the last accepted number. The event carries what is
+            // actually on screen: an empty or out-of-range field on the way out is a cancel,
+            // not a licence to write a stale number. Not checkValidity() — `step` makes any
+            // non-step-aligned rate a stepMismatch, which would drop a real $18.07 edit.
+            const {rangeOverflow, rangeUnderflow} = e.target.validity;
+            if (!rangeOverflow && !rangeUnderflow && e.target.value.trim() !== '') {
+              void commitRate(member, edit.dollars);
+            }
             setEdit(null);
           }}
         />
