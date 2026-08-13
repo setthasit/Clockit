@@ -2,10 +2,14 @@
 // history so the web and mobile clients have something to render before anyone
 // has clocked in for real.
 //
-// Every document it writes carries `seed: true`, and every run deletes those
-// documents first — so re-running replaces the fixture instead of stacking a
-// second copy of it. Never point -owner-sub at a real account: the marker makes
-// that user's document seed-owned, and the next run deletes it.
+// Every run deletes what it owns before writing — the employers owned by
+// -owner-sub plus their memberships and tips, and the time entries and pings of
+// the seeded users — so re-running replaces the fixture instead of stacking a
+// second copy of it. Ownership is read off the documents themselves rather than
+// a marker written at the end of a run, so a run interrupted halfway still
+// cleans up fully on the next attempt. Seeded users are matched by auth0 sub and
+// reused, never deleted. Never point -owner-sub at a real account: every
+// employer that user owns is purged.
 package main
 
 import (
@@ -33,8 +37,8 @@ import (
 const (
 	employerName = "Acme Cafe"
 	timezone     = "America/Vancouver"
-	// Anchor: downtown Vancouver. Shift fixes sit a few dozen metres off it,
-	// well inside the default 1 km radius.
+	// Anchor: downtown Vancouver. Shift fixes sit up to ~125 m off it with the
+	// default two employees, well inside the default 1 km radius.
 	anchorLat, anchorLng = 49.2827, -123.1207
 	accuracyM            = 12.0
 
@@ -46,8 +50,6 @@ const (
 
 	seededDays = 7
 )
-
-var seedCollections = []string{"users", "employers", "memberships", "time_entries", "location_pings", "tips"}
 
 // tipsByDaysAgo is the pool for three of the seven days; the rest stay untipped
 // so the report exercises both branches.
@@ -95,25 +97,32 @@ func run(ctx context.Context, ownerSub, ownerEmail string, employeeEmails []stri
 	if err := mongox.EnsureIndexes(ctx, db); err != nil {
 		return err
 	}
-	if err := purge(ctx, db); err != nil {
-		return err
-	}
 
 	users := user.NewStore(db, env)
 	employers := employer.NewStore(db, env)
 	entries := entry.NewStore(db, env)
 	tips := tip.NewStore(db)
 
+	// Users are resolved before the purge because they are what the purge keys
+	// off: GetOrCreate is idempotent by auth0 sub, so this reattaches to the
+	// users a previous run made and reaches every document hanging off them.
 	owner, err := ensureUser(ctx, users, ownerSub, ownerEmail)
 	if err != nil {
 		return err
 	}
+	staffUsers, err := ensureUsers(ctx, users, employeeEmails)
+	if err != nil {
+		return err
+	}
+	if err := purge(ctx, db, employers, owner.ID, append(userIDs(staffUsers), owner.ID)); err != nil {
+		return err
+	}
+
 	emp, err := employers.Create(ctx, owner.ID, employerName, timezone, employer.LatLng{Lat: anchorLat, Lng: anchorLng})
 	if err != nil {
 		return err
 	}
-
-	staff, err := ensureStaff(ctx, users, employers, emp, employeeEmails)
+	staff, err := addStaff(ctx, employers, emp, staffUsers)
 	if err != nil {
 		return err
 	}
@@ -123,9 +132,6 @@ func run(ctx context.Context, ownerSub, ownerEmail string, employeeEmails []stri
 	}
 	tipDates, err := seedTips(ctx, tips, emp.ID)
 	if err != nil {
-		return err
-	}
-	if err := stamp(ctx, db, emp.ID, append(userIDs(staff), owner.ID)); err != nil {
 		return err
 	}
 
@@ -141,41 +147,79 @@ type employee struct {
 	rate int64
 }
 
-func userIDs(staff []employee) []bson.ObjectID {
-	ids := make([]bson.ObjectID, 0, len(staff))
-	for _, e := range staff {
-		ids = append(ids, e.user.ID)
+func userIDs(users []*user.User) []bson.ObjectID {
+	ids := make([]bson.ObjectID, 0, len(users))
+	for _, u := range users {
+		ids = append(ids, u.ID)
 	}
 	return ids
 }
 
-func purge(ctx context.Context, db *mongo.Database) error {
-	for _, name := range seedCollections {
-		if _, err := db.Collection(name).DeleteMany(ctx, bson.M{"seed": true}); err != nil {
-			return fmt.Errorf("purge %s: %w", name, err)
+// purge deletes the previous fixture by the identity this command owns: the
+// owner's employers, whatever hangs off them, and the seeded users' entries.
+// Deleting the entries by user rather than by employer matters — an interrupted
+// run can leave an entry whose employer document never made it, and a leftover
+// entry is what wedges the next run's ClockIn/ClockOut pair.
+func purge(ctx context.Context, db *mongo.Database, employers *employer.Store, ownerID bson.ObjectID, users []bson.ObjectID) error {
+	employerIDs, err := seededEmployerIDs(ctx, db, employers, ownerID, users)
+	if err != nil {
+		return err
+	}
+
+	byUser := bson.M{"user_id": bson.M{"$in": users}}
+	byEmployer := bson.M{"employer_id": bson.M{"$in": employerIDs}}
+	targets := []struct {
+		name   string
+		filter bson.M
+	}{
+		{"time_entries", byUser},
+		{"location_pings", byUser},
+		{"memberships", byEmployer},
+		{"tips", byEmployer},
+		{"employers", bson.M{"owner_user_id": ownerID}},
+	}
+	for _, t := range targets {
+		if _, err := db.Collection(t.name).DeleteMany(ctx, t.filter); err != nil {
+			return fmt.Errorf("purge %s: %w", t.name, err)
 		}
 	}
 	return nil
 }
 
-// stamp marks everything this run created. The stores own their document shapes
-// and have no business knowing about fixtures, so the marker is added afterwards
-// rather than threaded through their signatures.
-func stamp(ctx context.Context, db *mongo.Database, employerID bson.ObjectID, users []bson.ObjectID) error {
-	owned := bson.M{"employer_id": employerID}
-	targets := map[string]bson.M{
-		"users":        {"_id": bson.M{"$in": users}},
-		"employers":    {"_id": employerID},
-		"memberships":  owned,
-		"time_entries": owned,
-		"tips":         owned,
+// seededEmployerIDs is every employer this command has ever created for the
+// owner. The employer document is the obvious source, but it is also the thing
+// most likely to be missing: a run interrupted after its memberships and entries
+// landed leaves children pointing at an employer that no longer exists, and
+// tips are reachable by nothing else. So the ids are also read back off the
+// children that do carry a user link.
+func seededEmployerIDs(ctx context.Context, db *mongo.Database, employers *employer.Store,
+	ownerID bson.ObjectID, users []bson.ObjectID,
+) ([]bson.ObjectID, error) {
+	owned, err := employers.ListByOwner(ctx, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("purge: list employers: %w", err)
 	}
-	for name, filter := range targets {
-		if _, err := db.Collection(name).UpdateMany(ctx, filter, bson.M{"$set": bson.M{"seed": true}}); err != nil {
-			return fmt.Errorf("stamp %s: %w", name, err)
+	seen := make(map[bson.ObjectID]bool, len(owned))
+	for _, e := range owned {
+		seen[e.ID] = true
+	}
+
+	byUser := bson.M{"user_id": bson.M{"$in": users}, "employer_id": bson.M{"$type": "objectId"}}
+	for _, name := range []string{"memberships", "time_entries"} {
+		var ids []bson.ObjectID
+		if err := db.Collection(name).Distinct(ctx, "employer_id", byUser).Decode(&ids); err != nil {
+			return nil, fmt.Errorf("purge: employer ids from %s: %w", name, err)
+		}
+		for _, id := range ids {
+			seen[id] = true
 		}
 	}
-	return nil
+
+	out := make([]bson.ObjectID, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 // ensureUser provisions through the same JIT path a first login takes, so the
@@ -194,18 +238,26 @@ func ensureUser(ctx context.Context, users *user.Store, sub, email string) (*use
 	return u, nil
 }
 
-// ensureStaff creates each employee's user before inviting them, which lets
-// AddMember's immediate-claim path land the membership straight in "active" —
-// the state the calendar and the report both need.
-func ensureStaff(ctx context.Context, users *user.Store, employers *employer.Store, emp *employer.Employer, emails []string) ([]employee, error) {
-	staff := make([]employee, 0, len(emails))
-	for i, email := range emails {
+func ensureUsers(ctx context.Context, users *user.Store, emails []string) ([]*user.User, error) {
+	out := make([]*user.User, 0, len(emails))
+	for _, email := range emails {
 		email = strings.ToLower(email)
 		u, err := ensureUser(ctx, users, "seed|"+localPart(email), email)
 		if err != nil {
 			return nil, err
 		}
-		m, err := employers.AddMember(ctx, emp, email)
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+// addStaff invites employees who already have user documents, which lets
+// AddMember's immediate-claim path land the membership straight in "active" —
+// the state the calendar and the report both need.
+func addStaff(ctx context.Context, employers *employer.Store, emp *employer.Employer, staffUsers []*user.User) ([]employee, error) {
+	staff := make([]employee, 0, len(staffUsers))
+	for i, u := range staffUsers {
+		m, err := employers.AddMember(ctx, emp, u.Email)
 		if err != nil {
 			return nil, err
 		}
@@ -243,7 +295,7 @@ func seedShifts(ctx context.Context, db *mongo.Database, entries *entry.Store, e
 	// the one-open-entry-per-user index requires.
 	for daysAgo := seededDays; daysAgo >= 1; daysAgo-- {
 		for i, e := range staff {
-			s, err := seedShift(ctx, db, entries, emp, e, i, daysAgo, today, loc)
+			s, err := seedShift(ctx, db, entries, emp, e, i, daysAgo, today)
 			if err != nil {
 				return nil, err
 			}
@@ -254,7 +306,7 @@ func seedShifts(ctx context.Context, db *mongo.Database, entries *entry.Store, e
 }
 
 func seedShift(ctx context.Context, db *mongo.Database, entries *entry.Store, emp *employer.Employer,
-	e employee, idx, daysAgo int, today time.Time, loc *time.Location,
+	e employee, idx, daysAgo int, today time.Time,
 ) (*shift, error) {
 	hour := 8 + (daysAgo+idx)%3
 	minutes := 450 + ((daysAgo+2*idx)%4)*30 // 7.5 h – 9 h
@@ -264,7 +316,7 @@ func seedShift(ctx context.Context, db *mongo.Database, entries *entry.Store, em
 	}
 
 	y, mo, d := today.Date()
-	in := time.Date(y, mo, d-daysAgo, hour, 0, 0, 0, loc)
+	in := time.Date(y, mo, d-daysAgo, hour, 0, 0, 0, today.Location())
 	outAt := in.Add(time.Duration(minutes) * time.Minute)
 	fix := func(at time.Time) entry.Fix {
 		return entry.Fix{
