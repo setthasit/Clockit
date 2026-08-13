@@ -13,6 +13,13 @@ import type {Employer} from '../lib/types';
 // rebuild on every render while the fetch is in flight.
 const NO_EMPLOYERS: Employer[] = [];
 
+// A failed login (bad audience, missing grant) comes back to '/' as ?error=&state= and
+// leaves this guard unauthenticated, so those params would ride into returnTo and be put
+// back in the address bar after the *next*, successful login. A reload there hits the SDK's
+// hasAuthParams() — (code|error) && state — with no live transaction and shows an "Invalid
+// state" banner over a perfectly good session. Nothing this app links to uses these names.
+const AUTH_PARAMS_RE = /[?&](code|state|error)=/;
+
 // Merely touching window.localStorage throws SecurityError where storage is blocked
 // (Chrome with all cookies blocked, some embedded webviews). Auth0 runs with
 // cacheLocation="memory", so failing soft here keeps the app fully usable — the employer
@@ -133,7 +140,8 @@ export function GuardedLayout() {
 
   // Carry the wanted path so sign-in can hand it to Auth0 as appState.returnTo.
   if (!isAuthenticated) {
-    return <Navigate to="/sign-in" replace state={{returnTo: pathname + search}} />;
+    const returnTo = AUTH_PARAMS_RE.test(search) ? pathname : pathname + search;
+    return <Navigate to="/sign-in" replace state={{returnTo}} />;
   }
 
   if (employers === 'error') {

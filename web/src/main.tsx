@@ -1,12 +1,28 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {RouterProvider} from 'react-router/dom';
-import {Auth0Provider} from '@auth0/auth0-react';
+import {Auth0Provider, type AppState} from '@auth0/auth0-react';
 import {Theme} from '@astryxdesign/core/theme';
 import {router} from './router';
 import {clockitTheme} from './clockit';
 import './index.css';
 import './clockit.css';
+
+// The SDK's default callback does history.replaceState(appState.returnTo), which moves the
+// address bar without telling react-router: the data router still believes it is at '/',
+// renders the index route, and that route's <Navigate to="/calendar"/> overwrites the deep
+// link a tick later. Navigating through the router keeps URL and router state in one place,
+// so the returnTo survives. Auth0 redirects back to the origin, so createBrowserRouter has
+// already run .initialize() by the time this fires — router.navigate() outside React is
+// exactly what a data router supports.
+// Replacing also drops ?code=/?state= from the URL, which the replaceState was doing as a
+// side effect and which must keep happening: a reload with them still present re-enters
+// handleRedirectCallback with no live transaction and fails with "Invalid state".
+function onRedirectCallback(appState?: AppState) {
+  // No appState (a login that carried no returnTo): pathname only — never the current
+  // search, which is still the callback's own ?code=&state=.
+  void router.navigate(appState?.returnTo ?? window.location.pathname, {replace: true});
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -27,7 +43,8 @@ createRoot(document.getElementById('root')!).render(
         audience: import.meta.env.VITE_AUTH0_AUDIENCE,
       }}
       cacheLocation="memory"
-      useRefreshTokens>
+      useRefreshTokens
+      onRedirectCallback={onRedirectCallback}>
       <Theme theme={clockitTheme} mode="system">
         <RouterProvider router={router} />
       </Theme>
