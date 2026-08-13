@@ -1,0 +1,27 @@
+{
+  "name": "clockit",
+  "version": "1.0.0",
+  "description": "> **Status: Work in progress** — currently in the design phase. No application code yet; the system design is under review. > > This repository is the MVP/reference implementation; it is not the production product. > > Built with AI (design, code, and infrastructure developed with AI assistance).",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/setthasit/Clockit.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/setthasit/Clockit/issues"
+  },
+  "homepage": "https://github.com/setthasit/Clockit#readme",
+  "devDependencies": {
+    "@swmansion/argent": "^0.20.0"
+  }
+}
