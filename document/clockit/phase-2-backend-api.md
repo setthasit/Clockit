@@ -36,7 +36,7 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
 - [ ] Task 5: Entry domain — endpoints
   - [x] 5.1: Clock-in
   - [x] 5.2: Clock-out
-  - [ ] 5.3: List + assign-employer
+  - [x] 5.3: List + assign-employer
   - [ ] 5.4: Pings (batch)
   - [ ] 5.5: Employer entries view
   - [ ] 5.6: Tests
