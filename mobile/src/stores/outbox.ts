@@ -33,7 +33,10 @@ export type OutboxItem =
 export type Attention = {
   kind: OutboxItem['kind'];
   clientId: string;
-  /** The `client_id` of the entry row 7.1 should mark; null for pings, which have no row. */
+  /** The `client_id` of the entry row 7.1 should mark; null for pings, which have no row. It may
+   * name a row that will never exist: a dropped clock-in leaves its own clock-out to be sent
+   * next, answered NoOpenEntry (409, non-retryable) and dropped in turn. 7.1 must render an
+   * unmatched record on its own rather than skip anything it cannot join to an entry. */
   entryClientId: string | null;
   code: string;
   message: string;
@@ -45,7 +48,17 @@ type OutboxState = {
   /**
    * Queue a write that could not be sent. 6.4's contract: try the request live first and enqueue
    * only when the failure is retryable, passing the body it just tried **unchanged** — the flush
-   * adds `queued`, so a body pre-marked here would flag a live tap as backdated.
+   * adds `queued`, so a body pre-marked here would flag a live tap as backdated. The queue then
+   * **owns that body**: `chunk` stores a non-ping item by reference, so mutating it after this
+   * call rewrites what gets replayed, and the next write puts the mutation on disk.
+   *
+   * ponytail: void, so the AsyncStorage write this triggers is neither awaited nor caught. Ceiling:
+   * a failed write (disk full, SQLite error, Android per-DB limit) leaves the item in memory only,
+   * and the next kill loses it with no record anywhere — wider than the rehydration window, which
+   * needs a kill within milliseconds, where this needs only a kill any time after the failure.
+   * Upgrade path: type it `Promise<void>` (persist's wrapped set already returns exactly that
+   * promise) and pin the cast with a test, once 6.4 has a reason to await durability — untested,
+   * the cast would resolve on nothing the day that internal changes, which is worse than the gap.
    */
   enqueue(item: OutboxItem): void;
   flush(): Promise<void>;
@@ -57,6 +70,17 @@ type OutboxState = {
 // Retrying costs a duplicate request the server dedupes; dropping costs a worker their hours, so
 // this is a total function over `status` rather than a 4xx/5xx if-chain with a hole in it.
 //   0   NETWORK, the offline case (api() maps every transport failure to it).
+//   401 UNAUTHENTICATED — a verdict on the *session*, not on the item, which is why it belongs
+//       with NETWORK rather than with the 4xx drops. client.ts raises it two ways: getToken
+//       rejecting non-retryably (session.ts: NO_REFRESH_TOKEN / SESSION_EXPIRED / RENEW_FAILED /
+//       any unrecognised code — precisely the long-offline case this queue exists for), and the
+//       server refusing the token. Both are recoverable by signing back in as the same Auth0 sub,
+//       after which every queued client_id and its original `at` are still acceptable inside
+//       MAX_QUEUED_AGE. Dropping would destroy the *whole* queue in one pass — the head drops,
+//       `continue` hands the next item the identical 401 — which is the exact harm session.ts
+//       maps raw iOS Auth0 codes to avoid. Retrying is self-limiting: onUnauthorized() has
+//       already routed the user to sign-in, the `return` below costs one 401 per trigger rather
+//       than N, and items too old to matter age out to QUEUED_TOO_OLD (422, a drop).
 //   429 RATE_LIMITED. Every route here is limited per sub per path at 30/min and a FIFO flush
 //       after an offline shift bursts straight past that — permanent would drop real data.
 //   >=500 the server's problem, not the payload's.
@@ -65,12 +89,17 @@ type OutboxState = {
 // clock-in — and ApiError(400, 'CONFIG') for a build with no EXPO_PUBLIC_API_URL, which is inlined
 // at build time and can never start working, so retrying it parks the queue forever.
 function retryable(status: number): boolean {
-  return status === 0 || status === 429 || status >= 500;
+  return status === 0 || status === 401 || status === 429 || status >= 500;
 }
 
-// ponytail: a flat cap, no per-code grouping. Ceiling: a build stuck on CONFIG drops every item
-// with the same message and the oldest records fall off the end (the queue is already drained by
-// then, so nothing further is lost). Upgrade path: dedupe by code when 7.1 has real copy for them.
+// A flat cap, evicting the *newest*, with no per-code grouping. Direction is the point: an
+// Attention record is the only surviving trace of a dropped item, and the only cascade that can
+// overflow 50 (a build stuck on CONFIG drops every queued item with one identical message) makes
+// the records near-duplicates — so evicting the newest throws away copies, while evicting the
+// oldest would throw away the earliest failures, which are the oldest and most likely real hours.
+// ponytail: the cap stays rather than going away, because this list is persisted and only 7.1's
+// dismiss ever clears it, and a long offline shift queues ping chunks by the dozen. Ceiling: past
+// 50 the newest evidence is lost. Upgrade path: dedupe by code when 7.1 has real copy for them.
 const MAX_ATTENTION = 50;
 
 // One flush at a time. A second caller joins the in-flight promise rather than returning
@@ -113,10 +142,16 @@ function send(item: OutboxItem): Promise<unknown> {
       return clockIn({...item.body, queued: true});
     case 'clock-out':
       return clockOut({...item.body, queued: true});
-    // ponytail: pings carry no idempotency key on the wire, so a batch the server accepted but
-    // never acknowledged is re-sent as duplicate breadcrumbs. Tolerated: they are decoration, not
-    // hours, and SpeedAnomaly already ignores non-positive intervals (geo.go) so duplicates raise
-    // no flag. Upgrade path: a batch client_id, or a unique index on {entry_id, at}.
+    // ponytail: pings carry neither an idempotency key nor an entry reference on the wire, so a
+    // batch the server accepted but never acknowledged is re-sent as duplicate breadcrumbs — and a
+    // batch flushed after the shift it was captured on has closed lands on whatever entry is open
+    // at request time (handler.go looks up OpenEntry then), i.e. on the *next* shift's track. FIFO
+    // keeps that rare; a live clock-out with pings still queued reaches it. Both are tolerated:
+    // breadcrumbs are decoration, not hours, and neither can raise a false flag, because
+    // SpeedAnomaly ignores non-positive intervals (geo.go) — which covers duplicates, and covers
+    // the misfiled batch too, since its fixes are older than the new shift's clock-in it is
+    // measured against. The cost is a polluted track. Upgrade path: a batch client_id and an
+    // entry_id on the wire, or a unique index on {entry_id, at}.
     case 'pings':
       return postPings(item.body);
   }
@@ -148,6 +183,27 @@ function uniqueByClientId<T extends {clientId: string}>(xs: T[]): T[] {
  * pill flicker clock.ts's second ponytail note describes. **This hands 9.1 one obligation**:
  * hydrateFromServer() does not touch `pendingSince`, so 9.1 must clear it after a drain (setOpen
  * with the hydrated entry) or the "waiting for connection" pill sticks forever.
+ *
+ * **And it hands 8.1 one, which is a correctness rule, not polish**: the queue is stored under a
+ * single device-wide key and is therefore NOT scoped to a user, so items outlive a sign-out.
+ * Sign out must clear both halves, in this order:
+ *
+ *     useOutboxStore.setState({items: [], needsAttention: []});  // in memory
+ *     await useOutboxStore.persist.clearStorage();               // on disk (setState alone
+ *                                                                // rewrites the key it clears)
+ *
+ * Skip it and the next person to sign in on a shared phone — the shift-work case this app is for —
+ * flushes the previous worker's queued clock-in against their own Auth0 sub on the first trigger:
+ * someone else's hours land on their account, silently, and only an employer edit can undo it.
+ * Note this queue deliberately survives a 401 (see `retryable`), so the window is a real one and
+ * not a race: the items are still there, waiting, when the next user arrives.
+ *
+ * ponytail: one global storage key, and an obligation delegated rather than enforced. Ceiling: a
+ * sign-out path that forgets the two lines above reintroduces the leak, and nothing here can fail
+ * loudly when it does. Upgrade path: per-sub scoping, which cannot be done at module scope because
+ * no `sub` exists yet — the session store would have to call
+ * `useOutboxStore.persist.setOptions({name: `clockit-outbox-${sub}`})` then `.rehydrate()` on every
+ * sign-in, which also needs this file's `hydrated` promise to become re-armable.
  */
 export const useOutboxStore = create<OutboxState>()(
   persist(
@@ -170,11 +226,13 @@ export const useOutboxStore = create<OutboxState>()(
             if (!(e instanceof ApiError)) throw e;
             // Stops where it stands rather than trying the next item: order is a correctness rule,
             // and a clock-out that overtakes its own clock-in finds no open entry, comes back 4xx,
-            // and is dropped — a whole shift lost to a queue that was only out of signal.
+            // and is dropped — a whole shift lost to a queue that was only out of signal. The drop
+            // path below does reach that outcome by design (see Attention.entryClientId); keeping
+            // it off the *retryable* path is what stops a signal problem from causing it.
             if (retryable(e.status)) return;
             set((s) => ({
               items: s.items.filter((i) => i.clientId !== item.clientId),
-              needsAttention: [...s.needsAttention, attentionFor(item, e)].slice(-MAX_ATTENTION),
+              needsAttention: [...s.needsAttention, attentionFor(item, e)].slice(0, MAX_ATTENTION),
             }));
             continue;
           }
@@ -202,6 +260,15 @@ export const useOutboxStore = create<OutboxState>()(
       name: 'clockit-outbox',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: ({items, needsAttention}) => ({items, needsAttention}),
+      // Declared now, with a passthrough migrate, rather than left to default. persist throws a
+      // stored blob away when its version differs and no migrate is given — it logs and hands
+      // `merge` undefined — and the re-persist below would then write the resulting empty queue
+      // straight over it. So without these two lines the *next* person to bump this number
+      // silently destroys every queued shift on every phone, once, with nothing to roll back to.
+      // Passing the payload through costs nothing today and makes that bump survivable; `merge`
+      // re-narrows the value defensively, so the cast asserts nothing it trusts.
+      version: 0,
+      migrate: (persisted) => persisted as OutboxState,
       // The default merge lets the stored state *replace* what is in memory (persist calls
       // set(state, true)), which here would silently eat a clock-in tapped during the rehydration
       // window — the launch-in-a-dead-zone case. Concatenated instead, stored first so FIFO age
@@ -217,15 +284,22 @@ export const useOutboxStore = create<OutboxState>()(
           ]),
         };
       },
-      // Unconditional, and the only thing that releases the flush: persist calls this callback on
-      // a read *error* as well as on success (ui.test.js pins that), and a corrupt store must
-      // leave the queue working on an empty list rather than never flushing again.
-      onRehydrateStorage: () => () => {
+      // persist calls this callback on a read *error* as well as on success (ui.test.js pins that).
+      // markHydrated() is therefore deliberately outside the guard and must stay there: it is the
+      // only thing that releases the flush, so gating it would leave a phone whose storage failed
+      // to read once unable to send anything, ever.
+      onRehydrateStorage: () => (_state, error) => {
         // persist writes storage on every set *except* the merge itself, so an item recovered by
         // the concat above would sit in memory only — and an enqueue during the rehydration window
         // has by then already overwritten storage with the pre-merge list. One write puts the
         // union back on disk. (Costs one redundant write per launch, as ui.ts's does.)
-        useOutboxStore.setState({});
+        //
+        // Not written when the read failed: state is then just the defaults, and persisting them
+        // would overwrite a blob that is only unreadable *now* — a transient AsyncStorage error is
+        // survivable, and next launch may well parse it. The guard cannot cover the version-
+        // mismatch case, which persist reports as success with `error` undefined; that is what the
+        // migrate above is for.
+        if (!error) useOutboxStore.setState({});
         markHydrated();
       },
     },
