@@ -41,7 +41,7 @@ Conventions for all domain packages (`user`, `employer`, `entry`, `tip`):
   - [x] 5.5: Employer entries view
   - [x] 5.6: Tests
 - [ ] Task 6: Tip domain
-  - [ ] 6.1: `split.go` (largest-remainder split) + unit tests
+  - [x] 6.1: `split.go` (largest-remainder split) + unit tests
   - [ ] 6.2: Tips PUT/GET + report endpoint
   - [ ] 6.3: Tests
 - [ ] Task 7: Custom telemetry
