@@ -92,7 +92,7 @@ func (s *Store) GetOwned(ctx context.Context, employerID, ownerUserID bson.Objec
 }
 
 // Get loads an employer without an ownership check: callers on the member side
-// (clock-in, tips report) authorize through ActiveMembership instead.
+// (clock-in) authorize through ActiveMembership instead.
 func (s *Store) Get(ctx context.Context, employerID bson.ObjectID) (*Employer, error) {
 	var e Employer
 	err := s.employers.FindOne(ctx, bson.M{"_id": employerID}).Decode(&e)

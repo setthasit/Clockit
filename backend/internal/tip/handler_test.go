@@ -200,7 +200,7 @@ func TestBuildReportMidnightSpanRoundingAndSplit(t *testing.T) {
 		shift(bo, local(9, 0, 14), local(11, 0, 14)),
 	}
 
-	days := buildReport(entries, members, []Tip{{Date: "2026-01-14", AmountCents: 100}}, loc)
+	days := buildReport(entries, members, []Tip{{Date: "2026-01-14", AmountCents: 100}}, loc, "", "")
 	if len(days) != 1 || days[0].Date != "2026-01-14" {
 		t.Fatalf("days = %+v, want one day 2026-01-14", days)
 	}
@@ -221,6 +221,88 @@ func TestBuildReportMidnightSpanRoundingAndSplit(t *testing.T) {
 	}
 	if boRow.Minutes != 120 || boRow.TipShareCents != 33 || boRow.TotalCents != 33 {
 		t.Fatalf("bo = %+v, want the tip share alone", boRow)
+	}
+}
+
+// A tip typed on the wrong date lands on a day nobody worked. It has to stay
+// visible — an invisible $500 is one the employer can never correct. The same
+// pass checks the day bounds bind here rather than in the entry query: the
+// slack window admits the tail of the previous day, and the report must not.
+func TestBuildReportSurfacesOrphanTipsAndBoundsDays(t *testing.T) {
+	loc, err := time.LoadLocation("America/Vancouver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ana := bson.NewObjectID()
+	members := []employer.Member{{UserID: &ana, Name: "Ana", Email: "ana@example.com"}}
+	local := func(day, h, m int) time.Time { return time.Date(2026, 1, day, h, m, 0, 0, loc) }
+	entries := []entry.Entry{
+		shift(ana, local(13, 23, 30), local(14, 1, 0)), // belongs to the 13th, out of range
+		shift(ana, local(14, 9, 0), local(14, 11, 0)),
+	}
+	tips := []Tip{{Date: "2026-01-14", AmountCents: 1000}, {Date: "2026-01-15", AmountCents: 50000}}
+
+	days := buildReport(entries, members, tips, loc, "2026-01-14", "2026-01-15")
+	if len(days) != 2 {
+		t.Fatalf("days = %+v, want the 14th and the orphaned 15th only", days)
+	}
+	if worked := days[0]; worked.Date != "2026-01-14" || worked.TotalMinutes != 120 || len(worked.Rows) != 1 {
+		t.Fatalf("worked day = %+v, want 120 minutes from the in-range shift alone", worked)
+	}
+	orphan := days[1]
+	if orphan.Date != "2026-01-15" || orphan.TipCents != 50000 || len(orphan.Rows) != 0 {
+		t.Fatalf("orphan day = %+v, want the tip visible with no shares", orphan)
+	}
+	if orphan.TotalTipShareCents != 0 || orphan.TotalMinutes != 0 || orphan.TotalCents != 0 {
+		t.Fatalf("orphan day = %+v, want nothing assigned", orphan)
+	}
+	// The table iterates rows: an empty day must serialise [] and not null.
+	body, err := json.Marshal(orphan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"rows":[]`) {
+		t.Fatalf("orphan day json = %s, want empty rows array", body)
+	}
+}
+
+// Zones that spring forward at midnight (Chile) have days whose local midnight
+// does not exist; time normalises those backwards an hour. A window built tight
+// on such a day would end before its last hour, so a 23:00 shift would silently
+// go unpaid. instantWindow keeps an hour of slack on both sides instead.
+func TestInstantWindowCoversMidnightGapDay(t *testing.T) {
+	loc, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		t.Skip("tzdata for America/Santiago unavailable")
+	}
+	var gap time.Time
+	for d := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC); d.Year() < 2028; d = d.AddDate(0, 0, 1) {
+		day := d.Format(dayLayout)
+		at, err := time.ParseInLocation(dayLayout, day, loc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at.Format(dayLayout) != day {
+			gap = d
+			break
+		}
+	}
+	if gap.IsZero() {
+		t.Skip("no midnight-gap day in this tzdata")
+	}
+
+	from, to, err := instantWindow(gap.Format(dayLayout), gap.Format(dayLayout), loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The store filters [from, to) on clock_in.at.
+	first := time.Date(gap.Year(), gap.Month(), gap.Day(), 1, 0, 0, 0, loc)
+	last := time.Date(gap.Year(), gap.Month(), gap.Day(), 23, 0, 0, 0, loc)
+	if first.Before(*from) {
+		t.Fatalf("window starts at %s, after the day's first shift %s", from, first)
+	}
+	if !last.Before(*to) {
+		t.Fatalf("window ends at %s, dropping the 23:00 shift at %s", to, last)
 	}
 }
 

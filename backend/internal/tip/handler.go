@@ -172,12 +172,13 @@ func (h *Handler) Report(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(http.StatusOK, echo.Map{"days": buildReport(entries, members, tips, loc)})
+	return c.JSON(http.StatusOK, echo.Map{"days": buildReport(entries, members, tips, loc, from, to)})
 }
 
 // buildReport is the whole report: pure, so the money arithmetic is testable
-// without a database.
-func buildReport(entries []entry.Entry, members []employer.Member, tips []Tip, loc *time.Location) []reportDay {
+// without a database. from and to are the requested day bounds (either may be
+// empty); the entry query only approximates them, so this is where they bind.
+func buildReport(entries []entry.Entry, members []employer.Member, tips []Tip, loc *time.Location, from, to string) []reportDay {
 	byUser := make(map[bson.ObjectID]employer.Member, len(members))
 	for _, m := range members {
 		if m.UserID != nil {
@@ -185,11 +186,14 @@ func buildReport(entries []entry.Entry, members []employer.Member, tips []Tip, l
 		}
 	}
 	tipByDay := make(map[string]int64, len(tips))
+	minutesByDay := map[string]map[bson.ObjectID]int64{}
 	for _, t := range tips {
 		tipByDay[t.Date] = t.AmountCents
+		// Seeded so a tip on a day nobody worked still gets a row: an employer
+		// who typed $500 on the wrong date has to see it to correct it (§4.6).
+		minutesByDay[t.Date] = map[bson.ObjectID]int64{}
 	}
 
-	minutesByDay := map[string]map[bson.ObjectID]int64{}
 	for i := range entries {
 		e := &entries[i]
 		if e.ClockOut == nil {
@@ -201,6 +205,9 @@ func buildReport(entries []entry.Entry, members []employer.Member, tips []Tip, l
 		// A shift belongs to the local day it started on, even when it ends on
 		// the next one (design §4.6).
 		day := e.ClockIn.At.In(loc).Format(dayLayout)
+		if (from != "" && day < from) || (to != "" && day > to) {
+			continue // only the slack instantWindow allows in, never a real day
+		}
 		if minutesByDay[day] == nil {
 			minutesByDay[day] = map[bson.ObjectID]int64{}
 		}
@@ -284,6 +291,10 @@ func (h *Handler) owned(c echo.Context) (*employer.Employer, error) {
 
 // dayWindow reads the optional [from, to] day bounds, compared as strings
 // because YYYY-MM-DD sorts chronologically.
+//
+// ponytail: both bounds optional means an omitted range scans an employer's
+// whole history; fine at a few years of days, add a limit or require a range
+// once that stops being true.
 func dayWindow(c echo.Context) (string, string, error) {
 	from, err := parseDay("from", c.QueryParam("from"))
 	if err != nil {
@@ -311,12 +322,14 @@ func parseDay(name, raw string) (string, error) {
 	return raw, nil
 }
 
-// instantWindow turns employer-local days into the half-open UTC window the
-// entry store filters clock_in.at on. Building it from local midnights is what
-// makes the day attribution right: a shift that starts at 23:50 local is inside
-// its own local day's window even though its UTC instant belongs to the next
-// UTC date. to is a day the caller asked to see, so the window runs to the
-// midnight after it.
+// instantWindow turns employer-local days into the UTC window the entry store
+// filters clock_in.at on. It is a prefilter, not the day attribution: buildReport
+// decides which day an entry belongs to from its own local date string. So the
+// window is deliberately an hour slack on both sides — where local midnight does
+// not exist (zones that spring forward at midnight, America/Santiago) time
+// normalises it backwards an hour, and a tight window would drop a 23:00 shift
+// on the last day as unpaid. The slack only ever admits rows the day filter
+// discards.
 func instantWindow(from, to string, loc *time.Location) (*time.Time, *time.Time, error) {
 	var fromAt, toAt *time.Time
 	if from != "" {
@@ -324,14 +337,15 @@ func instantWindow(from, to string, loc *time.Location) (*time.Time, *time.Time,
 		if err != nil {
 			return nil, nil, err
 		}
-		fromAt = &t
+		start := t.Add(-time.Hour)
+		fromAt = &start
 	}
 	if to != "" {
 		t, err := time.ParseInLocation(dayLayout, to, loc)
 		if err != nil {
 			return nil, nil, err
 		}
-		next := t.AddDate(0, 0, 1)
+		next := t.AddDate(0, 0, 1).Add(time.Hour)
 		toAt = &next
 	}
 	return fromAt, toAt, nil

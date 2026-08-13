@@ -230,6 +230,11 @@ func (h *Handler) ListMembers(c echo.Context) error {
 	return c.JSON(http.StatusOK, echo.Map{"members": members})
 }
 
+// maxHourlyRateCents caps a rate at $1,000,000/hour: nothing real comes near it,
+// so it only ever catches dollars sent as cents or a stray keystroke, and it
+// keeps rate x minutes in the pay report far inside int64 forever.
+const maxHourlyRateCents = 100_000_000
+
 type memberRateRequest struct {
 	// Pointer: a missing rate is a malformed request, not a request to zero it.
 	HourlyRateCents *int64 `json:"hourly_rate_cents"`
@@ -253,6 +258,9 @@ func (h *Handler) SetMemberRate(c echo.Context) error {
 	}
 	if *req.HourlyRateCents < 0 {
 		return httpx.Invalid("hourly_rate_cents must not be negative")
+	}
+	if *req.HourlyRateCents > maxHourlyRateCents {
+		return httpx.Invalid("hourly_rate_cents is implausibly large")
 	}
 	if err := h.store.SetMemberRate(c.Request().Context(), e, mid, *req.HourlyRateCents); err != nil {
 		return mapStoreError(err)

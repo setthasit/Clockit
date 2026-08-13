@@ -296,6 +296,23 @@ func TestEmployerScopedRoutesAre404ForNonOwners(t *testing.T) {
 	}
 }
 
+// Both ends of the rate are typos, not rates: a negative wage, and dollars sent
+// as cents. Rejecting them keeps rate x minutes in the pay report sane.
+func TestSetMemberRateRejectsImplausibleAmounts(t *testing.T) {
+	api := newTestAPI(t)
+	owner := api.token(t, "owner@example.com")
+	employerID := api.createEmployer(t, owner, "Acme")
+	memberID := api.addMember(t, owner, employerID, "member@example.com").ID
+	path := "/v1/employers/" + employerID + "/members/" + memberID
+
+	for _, body := range []string{`{}`, `{"hourly_rate_cents":-1}`, `{"hourly_rate_cents":100000001}`} {
+		assertErrorCode(t, api.do(http.MethodPatch, path, owner, body), http.StatusBadRequest, "INVALID_ARGUMENT")
+	}
+	if got := api.onlyMember(t, owner, employerID); got.HourlyRateCents != nil {
+		t.Fatalf("member = %+v, want no rate stored", got)
+	}
+}
+
 // The rate is employer-owned data (design §4.2): the members list may show it,
 // the employee's own profile must never carry it.
 func TestHourlyRateIsOwnerOnlyAndNeverInMe(t *testing.T) {
