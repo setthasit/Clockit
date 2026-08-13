@@ -21,7 +21,7 @@ Rules: no barrel files; components in `src/components` only when reused or >~80 
   - [ ] 2.1: Auth0 provider + session store
   - [ ] 2.2: Sign-in screen + auth gate
 - [ ] Task 3: API layer
-  - [ ] 3.1: `src/api/client.ts` fetch wrapper
+  - [x] 3.1: `src/api/client.ts` fetch wrapper
   - [ ] 3.2: Typed endpoints (`me.ts`, `entries.ts`)
 - [ ] Task 4: Location helpers
   - [ ] 4.1: `src/location/fix.ts`
@@ -171,6 +171,12 @@ type OutboxState = {
 
 Persisted via `persist` + AsyncStorage (whole store). Flush is serialized (guard flag). 4xx on replayed clock-in/out means the server rejected an offline action — remove from queue, record in `needsAttention`, clock store reverts optimistic state; History shows the banner (7.1).
 
+Classifier constraints found while building 3.1 — the retry rule is `status === 0 || status >= 500 || status === 429`, everything **else** drops:
+
+- **429 must retry.** The backend rate-limits per `sub` per route path at 30/min (`RATE_LIMIT_PER_MIN`), and `/v1/entries/clock-in`, `/clock-out` and `/v1/pings` are all limited. A FIFO flush after a long offline shift bursts past that (pings cap at 64/batch), so treating 429 as permanent would drop real data and raise a spurious "needs attention". Do not remap 429 inside `api()` instead — task 6.4 maps `code` to user copy and would be corrupted.
+- **Make the classifier total, not a 4xx/5xx if-chain.** `api()` can throw `ApiError` with a 2xx status (a truncated 200 body → `ApiError(200, "UNKNOWN")`), which no 4xx/5xx branch covers. Dropping is correct there — the server returned 200, the write landed, and a retry would double the clock-in.
+- `ApiError(400, "CONFIG")` (missing `EXPO_PUBLIC_API_URL`) is deliberately non-retryable: `EXPO_PUBLIC_*` is inlined at build time, so a build missing it can never start working and would park the queue forever.
+
 ### Task 6: Clock screen
 
 **File**: `mobile/src/app/(tabs)/index.tsx` (+ `mobile/src/components/ClockButton.tsx`, `DistanceBadge.tsx`, `EmployerSheet.tsx`)
@@ -240,5 +246,6 @@ Flush on: NetInfo `isConnected` transition to true, AppState → `active`, succe
 
 ### Phase completion notes (deviations from plan)
 
+- 3.1: task order swapped — task 3 built before task 2. `stores/session.ts` needs the typed endpoints for `loadMe()`, and the endpoints need a token, which is a cycle. Broken the same way the web app already does it (`web/src/lib/api.ts:29`): `client.ts` imports nothing at all and takes `setApiAuth({getToken, onUnauthorized})` from the session provider at startup. `AbortSignal.timeout()`/`AbortSignal.any()` do **not** exist on RN 0.86 (Hermes polyfills abort via the `abort-controller` package, which has neither), so the 15 s timeout is `AbortController` + `setTimeout` cleared in `finally`, and a caller-supplied `signal` is replaced rather than composed. Empty-body handling deliberately diverges from `web/src/lib/api.ts:61` — no mobile-facing route 204s, so a blank 200 is truncation and must throw rather than return `undefined as T` (which would escape the outbox classifier as a raw `TypeError`). `getToken` contract lives on the `setApiAuth` JSDoc: `ApiError` means network-and-retryable, any other rejection signs the user out — Auth0 rejects `getCredentials()` with `NO_NETWORK` when offline, and collapsing that to 401 would both wipe the session and make the outbox discard the queued clock-in.
 - 1.2: config lives in `app.config.ts` (TS), not `app.json` — the plan's env-var requirement needs `process.env`. No `extra` block: `EXPO_PUBLIC_*` vars are inlined at build time, so reading them directly beats an `extra` + `Constants.expoConfig.extra` indirection hop. `expo-location` plugin also needs `locationAlwaysPermission` (background is enabled, and App Review reads `NSLocationAlwaysUsageDescription`, which otherwise gets a generic auto-string) and `motionUsagePermission: false` (the plugin writes `NSMotionUsageDescription` unconditionally for an API ClockIt never calls). `userInterfaceStyle: "light"` — the theme is a single light palette, so `automatic` would render dark `@expo/ui`/native chrome over light screens. `expo-task-manager` installed now, not in phase 5: it is not a transitive dep of `expo-location`, and `startLocationUpdatesAsync` needs it — adding it later would force the native rebuild the pre-landed background keys exist to avoid. Auth0Provider + auth gate deferred to task 2 (they need the session store). CI/EAS must inject `EXPO_PUBLIC_AUTH0_DOMAIN`; without it the `react-native-auth0` plugin aborts prebuild.
 - 1.1: SDK 57 default template is **src-based** — router root is `mobile/src/app/`, not `mobile/app/` (Expo: "only the `src/app` directory will be used if you have both", so root-level `app/` files would silently never load). All file paths above rewritten accordingly; `docs/design.md` §5.1's tree still shows the root-level form. `@expo/ui` ships with the template, so `expo install @expo/ui` was a no-op (`expo install --check` used to confirm). Versions: Expo SDK 57.0.12, `@expo/ui` 57.0.10, expo-router 57.0.12, RN 0.86.2, TS ~6.0.3.
