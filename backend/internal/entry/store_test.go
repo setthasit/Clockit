@@ -22,7 +22,9 @@ import (
 	"github.com/setthasit/clockit/backend/internal/user"
 )
 
-func testStore(t *testing.T) (*Store, *user.User) {
+// testDB is shared with the handler tests, which need the same database and
+// envelope for the user and employer stores as well.
+func testDB(t *testing.T) (*mongo.Database, *crypto.Envelope) {
 	t.Helper()
 	uri := os.Getenv("MONGO_URI")
 	if uri == "" {
@@ -58,6 +60,12 @@ func testStore(t *testing.T) (*Store, *user.User) {
 	if err := mongox.EnsureIndexes(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
+	return db, env
+}
+
+func testStore(t *testing.T) (*Store, *user.User) {
+	t.Helper()
+	db, env := testDB(t)
 	_, wrapped, err := env.NewDEK(context.Background())
 	if err != nil {
 		t.Fatal(err)

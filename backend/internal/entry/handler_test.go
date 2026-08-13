@@ -2,16 +2,26 @@ package entry
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	"github.com/valkey-io/valkey-go"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
+	"github.com/setthasit/clockit/backend/internal/auth"
 	"github.com/setthasit/clockit/backend/internal/config"
 	"github.com/setthasit/clockit/backend/internal/employer"
 	"github.com/setthasit/clockit/backend/internal/httpx"
@@ -246,5 +256,505 @@ func TestEmployerListJoinsMembersAndHidesCoordinates(t *testing.T) {
 	rec = getEmployerEntries(t, h, &user.User{ID: bson.NewObjectID()}, emp.ID)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s, want 404 for a non-owner", rec.Code, rec.Body)
+	}
+}
+
+const (
+	testAuth0Domain   = "test.auth0.local"
+	testAuth0Audience = "https://api.clockit.test"
+)
+
+type testAPI struct {
+	handler http.Handler
+	key     *rsa.PrivateKey
+	db      *mongo.Database
+}
+
+// newTestAPI wires the real route stack — httpx.NewEcho, the auth middleware
+// against a local signing key, Mongo and Valkey — so these tests exercise the
+// entry endpoints through the same middleware chain production uses. The user
+// and employer routes are registered alongside because membership setup and the
+// caller's user document come from them.
+func newTestAPI(t *testing.T) *testAPI {
+	t.Helper()
+	addr := os.Getenv("VALKEY_ADDR")
+	if addr == "" {
+		t.Skip("VALKEY_ADDR not set")
+	}
+	db, env := testDB(t)
+
+	vk, err := valkey.NewClient(valkey.ClientOption{InitAddress: []string{addr}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(vk.Close)
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Auth0Domain:   testAuth0Domain,
+		Auth0Audience: testAuth0Audience,
+		MaxAccuracyM:  100,
+		MaxClockSkew:  5 * time.Minute,
+		AnchorRadiusM: 1000,
+		// High enough that no test trips the limiter; the limiter itself is
+		// covered in valkeyx.
+		SpeedAnomalyKMH: 200,
+		RateLimitPerMin: 1000,
+	}
+	authMW := auth.NewMiddlewareWithKeyfunc(cfg, func(*jwt.Token) (any, error) { return &key.PublicKey, nil })
+	e := httpx.NewEcho(cfg)
+	userStore := user.NewStore(db, env)
+	employerStore := employer.NewStore(db, env)
+	user.RegisterRoutes(e, user.NewHandler(userStore), authMW, vk, cfg)
+	employer.RegisterRoutes(e, employer.NewHandler(employerStore), userStore, authMW, vk, cfg)
+	RegisterRoutes(e, NewHandler(NewStore(db, env), employerStore, cfg), userStore, authMW, vk, cfg)
+	return &testAPI{handler: e, key: key, db: db}
+}
+
+// token mints a verified identity; the subject is derived from the address so
+// repeated calls for one address are the same person.
+func (a *testAPI) token(t *testing.T, email string) string {
+	return a.signedToken(t, email, true)
+}
+
+// unverifiedToken is the only way to reach a handler as someone whose
+// invitation has not been claimed: a verified sign-in claims it on the spot.
+func (a *testAPI) unverifiedToken(t *testing.T, email string) string {
+	return a.signedToken(t, email, false)
+}
+
+func (a *testAPI) signedToken(t *testing.T, email string, verified bool) string {
+	t.Helper()
+	raw, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"sub":                            "auth0|" + email,
+		"iss":                            "https://" + testAuth0Domain + "/",
+		"aud":                            testAuth0Audience,
+		"exp":                            time.Now().Add(time.Hour).Unix(),
+		"https://clockit/email":          email,
+		"https://clockit/email_verified": verified,
+	}).SignedString(a.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func (a *testAPI) do(method, path, token, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	a.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func decodeBody(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, out any) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, wantStatus, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
+		t.Fatalf("%v (%s)", err, rec.Body)
+	}
+}
+
+// assertErrorCode checks the envelope both frontends key their UX off, and
+// hands back the details map so distance assertions read as one line.
+func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string) map[string]any {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	decodeBody(t, rec, wantStatus, &body)
+	if body.Error.Code != wantCode {
+		t.Fatalf("code = %q, want %q (%s)", body.Error.Code, wantCode, rec.Body)
+	}
+	return body.Error.Details
+}
+
+type entryJSON struct {
+	ID               string  `json:"id"`
+	ClientID         string  `json:"client_id"`
+	EmployerID       *string `json:"employer_id"`
+	Status           string  `json:"status"`
+	LocationVerified bool    `json:"location_verified"`
+}
+
+func decodeEntry(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int) entryJSON {
+	t.Helper()
+	var body struct {
+		Entry entryJSON `json:"entry"`
+	}
+	decodeBody(t, rec, wantStatus, &body)
+	return body.Entry
+}
+
+// clockJSON builds a clock-in/clock-out body. Coordinates go through
+// FormatFloat rather than a %f verb so a fixture derived from northOffset
+// arrives at the server with the distance the test computed.
+func clockJSON(clientID, employerID string, at time.Time, lat, lng float64) string {
+	employerField := ""
+	if employerID != "" {
+		employerField = fmt.Sprintf("%q:%q,", "employer_id", employerID)
+	}
+	return fmt.Sprintf(`{%s"client_id":%q,"at":%q,"loc":{"lat":%s,"lng":%s,"accuracy":10},"mocked":false}`,
+		employerField, clientID, at.Format(time.RFC3339Nano),
+		strconv.FormatFloat(lat, 'f', -1, 64), strconv.FormatFloat(lng, 'f', -1, 64))
+}
+
+func (a *testAPI) clockIn(token, clientID, employerID string, at time.Time, lat, lng float64) *httptest.ResponseRecorder {
+	return a.do(http.MethodPost, "/v1/entries/clock-in", token, clockJSON(clientID, employerID, at, lat, lng))
+}
+
+func (a *testAPI) clockOut(token, clientID string, at time.Time, lat, lng float64) *httptest.ResponseRecorder {
+	return a.do(http.MethodPost, "/v1/entries/clock-out", token, clockJSON(clientID, "", at, lat, lng))
+}
+
+func (a *testAPI) createEmployer(t *testing.T, token string, anchor employer.LatLng) string {
+	t.Helper()
+	var body struct {
+		Employer struct {
+			ID string `json:"id"`
+		} `json:"employer"`
+	}
+	decodeBody(t, a.do(http.MethodPost, "/v1/employers", token, fmt.Sprintf(
+		`{"name":"Acme","anchor":{"lat":%s,"lng":%s},"timezone":"America/Vancouver"}`,
+		strconv.FormatFloat(anchor.Lat, 'f', -1, 64), strconv.FormatFloat(anchor.Lng, 'f', -1, 64))),
+		http.StatusCreated, &body)
+	return body.Employer.ID
+}
+
+// activeMember signs the address in before the invitation is created, so the
+// membership is claimed on add and the returned token can clock in right away.
+func (a *testAPI) activeMember(t *testing.T, ownerToken, employerID, email string) string {
+	t.Helper()
+	token := a.token(t, email)
+	if rec := a.do(http.MethodGet, "/v1/me", token, ""); rec.Code != http.StatusOK {
+		t.Fatalf("sign in: status = %d: %s", rec.Code, rec.Body)
+	}
+	rec := a.do(http.MethodPost, "/v1/employers/"+employerID+"/members", ownerToken, `{"email":"`+email+`"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add member: status = %d: %s", rec.Code, rec.Body)
+	}
+	return token
+}
+
+func (a *testAPI) storedEntry(t *testing.T, id string) Entry {
+	t.Helper()
+	oid, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e Entry
+	if err := a.db.Collection("time_entries").FindOne(context.Background(), bson.M{"_id": oid}).Decode(&e); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func (a *testAPI) countEntries(t *testing.T) int64 {
+	t.Helper()
+	n, err := a.db.Collection("time_entries").CountDocuments(context.Background(), bson.M{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// The mobile outbox replays a clock-in until it is acknowledged: every replay
+// must answer with the original entry, and the location rules must not run a
+// second time — by the time a backlog flushes, the fix is old and far away.
+func TestClockInReplayReturnsTheOriginalEntry(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "solo@example.com")
+	at := time.Now().UTC().Add(-time.Minute)
+
+	first := api.clockIn(token, "c-1", "", at, vanLat, vanLng)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", first.Code, first.Body)
+	}
+	replay := api.clockIn(token, "c-1", "", at, vanLat, vanLng)
+	if replay.Code != http.StatusOK {
+		t.Fatalf("replay status = %d, want 200: %s", replay.Code, replay.Body)
+	}
+	if replay.Body.String() != first.Body.String() {
+		t.Fatalf("replay body = %s, want the original %s", replay.Body, first.Body)
+	}
+
+	stale := api.clockIn(token, "c-1", "", time.Now().UTC().Add(-time.Hour), vanLat+northOffset(50_000), vanLng)
+	if stale.Code != http.StatusOK || stale.Body.String() != first.Body.String() {
+		t.Fatalf("stale replay = %d %s, want the original entry", stale.Code, stale.Body)
+	}
+	if n := api.countEntries(t); n != 1 {
+		t.Fatalf("stored %d entries, want 1", n)
+	}
+}
+
+// A different client_id while a shift is running is a second clock-in, not a
+// replay: the app forgot to clock out, and the conflict is what tells it so.
+func TestSecondClockInWhileOpenIsRejected(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "double@example.com")
+	now := time.Now().UTC()
+
+	if rec := api.clockIn(token, "c-1", "", now.Add(-time.Minute), vanLat, vanLng); rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body)
+	}
+	assertErrorCode(t, api.clockIn(token, "c-2", "", now, vanLat, vanLng), http.StatusConflict, "OPEN_ENTRY_EXISTS")
+	if n := api.countEntries(t); n != 1 {
+		t.Fatalf("stored %d entries, want 1", n)
+	}
+}
+
+// The distance is in the error so the app can say how far off the employee is
+// rather than a bare "too far".
+func TestEmployerClockInOutOfRangeReportsTheDistance(t *testing.T) {
+	api := newTestAPI(t)
+	owner := api.token(t, "owner@example.com")
+	employerID := api.createEmployer(t, owner, employer.LatLng{Lat: vanLat, Lng: vanLng})
+	worker := api.activeMember(t, owner, employerID, "late@example.com")
+
+	rec := api.clockIn(worker, "c-1", employerID, time.Now().UTC(), vanLat+northOffset(1800), vanLng)
+	details := assertErrorCode(t, rec, http.StatusUnprocessableEntity, "OUT_OF_RANGE")
+	if details["distance_m"] != float64(1800) || details["limit_m"] != float64(1000) {
+		t.Fatalf("details = %v, want distance_m 1800 and limit_m 1000", details)
+	}
+	if n := api.countEntries(t); n != 0 {
+		t.Fatalf("stored %d entries, want none", n)
+	}
+
+	// Inside the zone is the control: the rejection was about distance alone.
+	inRange := api.clockIn(worker, "c-2", employerID, time.Now().UTC(), vanLat+northOffset(900), vanLng)
+	got := decodeEntry(t, inRange, http.StatusCreated)
+	if got.EmployerID == nil || *got.EmployerID != employerID || !got.LocationVerified {
+		t.Fatalf("entry = %+v, want a verified entry for %s", got, employerID)
+	}
+}
+
+// An invitation binds an address, not a person: until a verified sign-in claims
+// it, the holder is no more entitled to the employer's zone than a stranger.
+func TestClockInRequiresAnActiveMembership(t *testing.T) {
+	api := newTestAPI(t)
+	owner := api.token(t, "boss@example.com")
+	employerID := api.createEmployer(t, owner, employer.LatLng{Lat: vanLat, Lng: vanLng})
+
+	const invited = "invited@example.com"
+	if rec := api.do(http.MethodPost, "/v1/employers/"+employerID+"/members", owner,
+		`{"email":"`+invited+`"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("add member: status = %d: %s", rec.Code, rec.Body)
+	}
+
+	now := time.Now().UTC()
+	cases := []struct{ name, token string }{
+		{"invited but unclaimed", api.unverifiedToken(t, invited)},
+		{"never invited", api.token(t, "stranger@example.com")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertErrorCode(t, api.clockIn(tc.token, "c-1", employerID, now, vanLat, vanLng),
+				http.StatusForbidden, "NOT_MEMBER")
+		})
+	}
+	if n := api.countEntries(t); n != 0 {
+		t.Fatalf("stored %d entries, want none", n)
+	}
+}
+
+// A personal shift is its own anchor (design §4.5): closing it a couple of
+// kilometres away is the same rejection an employer zone would give.
+func TestPersonalClockOutBeyondTheStartIsRejected(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "roamer@example.com")
+	opened := decodeEntry(t, api.clockIn(token, "c-1", "", time.Now().UTC().Add(-2*time.Minute), vanLat, vanLng),
+		http.StatusCreated)
+
+	rec := api.clockOut(token, "close-1", time.Now().UTC(), vanLat+northOffset(1800), vanLng)
+	details := assertErrorCode(t, rec, http.StatusUnprocessableEntity, "OUT_OF_RANGE")
+	if details["distance_m"] != float64(1800) || details["limit_m"] != float64(1000) {
+		t.Fatalf("details = %v, want distance_m 1800 and limit_m 1000", details)
+	}
+	if stored := api.storedEntry(t, opened.ID); stored.Status != statusOpen || stored.ClockOut != nil {
+		t.Fatalf("stored = %+v, want the shift still open", stored)
+	}
+
+	// Back within the radius it closes, so nothing but position was wrong.
+	closed := decodeEntry(t, api.clockOut(token, "close-1", time.Now().UTC(), vanLat+northOffset(900), vanLng),
+		http.StatusOK)
+	if closed.ID != opened.ID || closed.Status != statusClosed {
+		t.Fatalf("entry = %+v, want %s closed", closed, opened.ID)
+	}
+}
+
+func TestClockOutWithoutAnOpenShift(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "idle@example.com")
+	assertErrorCode(t, api.clockOut(token, "close-1", time.Now().UTC(), vanLat, vanLng),
+		http.StatusConflict, "NO_OPEN_ENTRY")
+}
+
+// Same contract as the clock-in replay, on the close half: the acknowledgement
+// can be lost, so the outbox re-sends a close whose fix is by then stale and
+// far away, and the server must still answer with the entry it already closed.
+func TestClockOutReplaySkipsTheLocationRules(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "replay@example.com")
+	if rec := api.clockIn(token, "c-1", "", time.Now().UTC().Add(-2*time.Minute), vanLat, vanLng); rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body)
+	}
+
+	at := time.Now().UTC()
+	first := api.clockOut(token, "close-1", at, vanLat, vanLng)
+	if first.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", first.Code, first.Body)
+	}
+	replay := api.clockOut(token, "close-1", at, vanLat, vanLng)
+	if replay.Code != http.StatusOK || replay.Body.String() != first.Body.String() {
+		t.Fatalf("replay = %d %s, want the original %s", replay.Code, replay.Body, first.Body)
+	}
+	stale := api.clockOut(token, "close-1", at.Add(-time.Hour), vanLat+northOffset(50_000), vanLng)
+	if stale.Code != http.StatusOK || stale.Body.String() != first.Body.String() {
+		t.Fatalf("stale replay = %d %s, want the original entry", stale.Code, stale.Body)
+	}
+}
+
+// closeRace fires two clock-outs at one open shift at the same instant, which
+// is what makes the store's status guard fail for the loser and sends the
+// handler down its post-ErrEntryNotOpen branch.
+func (a *testAPI) closeRace(token, clientA, clientB string, at time.Time) [2]*httptest.ResponseRecorder {
+	var recs [2]*httptest.ResponseRecorder
+	ids := [2]string{clientA, clientB}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range recs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			recs[i] = a.clockOut(token, ids[i], at, vanLat, vanLng)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	return recs
+}
+
+// closeRaceRounds is how many shifts each race test burns. A single round
+// usually serialises, and the loser then simply finds no open entry; the
+// handler's post-ErrEntryNotOpen branch only runs when the two requests
+// genuinely overlap, which takes a run of rounds to hit. The assertions hold
+// either way — the repetition buys branch coverage, not correctness.
+const closeRaceRounds = 30
+
+// Two parallel flushes of the same close: whichever loses the write must still
+// recognise its own close through close_client_id and answer with the entry,
+// never a conflict.
+func TestConcurrentClockOutWithOneClientIDBothReplay(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "racer@example.com")
+
+	for i := range closeRaceRounds {
+		at := time.Now().UTC()
+		if rec := api.clockIn(token, fmt.Sprintf("c-%d", i), "", at.Add(-time.Minute), vanLat, vanLng); rec.Code != http.StatusCreated {
+			t.Fatalf("round %d: status = %d, want 201: %s", i, rec.Code, rec.Body)
+		}
+		clientID := fmt.Sprintf("close-%d", i)
+		recs := api.closeRace(token, clientID, clientID, at)
+		for j, rec := range recs {
+			if rec.Code != http.StatusOK {
+				t.Fatalf("round %d call %d: status = %d, want 200: %s", i, j, rec.Code, rec.Body)
+			}
+		}
+		if recs[0].Body.String() != recs[1].Body.String() {
+			t.Fatalf("round %d bodies differ:\n%s\n%s", i, recs[0].Body, recs[1].Body)
+		}
+		if stored := api.storedEntry(t, decodeEntry(t, recs[0], http.StatusOK).ID); stored.CloseClientID != clientID {
+			t.Fatalf("round %d stored = %+v, want close_client_id %s", i, stored, clientID)
+		}
+	}
+}
+
+// Two different closes racing for one shift is not a replay: exactly one wins
+// and the other is told the shift is gone.
+func TestConcurrentClockOutWithTwoClientIDsHasOneWinner(t *testing.T) {
+	api := newTestAPI(t)
+	token := api.token(t, "contender@example.com")
+
+	for i := range closeRaceRounds {
+		at := time.Now().UTC()
+		if rec := api.clockIn(token, fmt.Sprintf("c-%d", i), "", at.Add(-time.Minute), vanLat, vanLng); rec.Code != http.StatusCreated {
+			t.Fatalf("round %d: status = %d, want 201: %s", i, rec.Code, rec.Body)
+		}
+		closed, conflicts := 0, 0
+		for j, rec := range api.closeRace(token, fmt.Sprintf("a-%d", i), fmt.Sprintf("b-%d", i), at) {
+			switch rec.Code {
+			case http.StatusOK:
+				closed++
+			case http.StatusConflict:
+				assertErrorCode(t, rec, http.StatusConflict, "NO_OPEN_ENTRY")
+				conflicts++
+			default:
+				t.Fatalf("round %d call %d: status = %d: %s", i, j, rec.Code, rec.Body)
+			}
+		}
+		if closed != 1 || conflicts != 1 {
+			t.Fatalf("round %d: %d closed and %d conflicted, want one of each", i, closed, conflicts)
+		}
+	}
+	if n := api.countEntries(t); n != closeRaceRounds {
+		t.Fatalf("stored %d entries, want %d", n, closeRaceRounds)
+	}
+}
+
+// Assigning never rejects (design §4.5.5): a shift worked outside the zone is
+// still a real shift, it is just recorded unverified for the employer to judge.
+func TestAssignRecordsTheDistanceVerdict(t *testing.T) {
+	api := newTestAPI(t)
+	owner := api.token(t, "cafe@example.com")
+	employerID := api.createEmployer(t, owner, employer.LatLng{Lat: vanLat, Lng: vanLng})
+	worker := api.activeMember(t, owner, employerID, "shifty@example.com")
+
+	// shift records a closed personal shift whose two fixes sit metres north of
+	// the employer's anchor.
+	now := time.Now().UTC()
+	shift := func(n int, metresNorth float64, in, out time.Duration) string {
+		t.Helper()
+		lat := vanLat + northOffset(metresNorth)
+		opened := decodeEntry(t, api.clockIn(worker, fmt.Sprintf("c-%d", n), "", now.Add(in), lat, vanLng),
+			http.StatusCreated)
+		decodeEntry(t, api.clockOut(worker, fmt.Sprintf("close-%d", n), now.Add(out), lat, vanLng), http.StatusOK)
+		return opened.ID
+	}
+	nearID := shift(1, 900, -3*time.Minute, -2*time.Minute)
+	farID := shift(2, 1800, -90*time.Second, -30*time.Second)
+
+	cases := []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{"inside the zone", nearID, true},
+		{"outside the zone", farID, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := decodeEntry(t, api.do(http.MethodPatch, "/v1/entries/"+tc.id, worker,
+				`{"employer_id":"`+employerID+`"}`), http.StatusOK)
+			if got.EmployerID == nil || *got.EmployerID != employerID {
+				t.Fatalf("entry = %+v, want employer %s", got, employerID)
+			}
+			if got.LocationVerified != tc.want {
+				t.Fatalf("location_verified = %v, want %v", got.LocationVerified, tc.want)
+			}
+			stored := api.storedEntry(t, tc.id)
+			if stored.EmployerID == nil || stored.EmployerID.Hex() != employerID || stored.LocationVerified != tc.want {
+				t.Fatalf("stored = %+v, want employer %s and location_verified %v", stored, employerID, tc.want)
+			}
+		})
 	}
 }

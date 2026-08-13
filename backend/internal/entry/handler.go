@@ -223,7 +223,7 @@ func (h *Handler) ClockOut(c echo.Context) error {
 		return err
 	}
 	if open == nil {
-		return httpx.NoOpenEntry()
+		return h.closedOrConflict(c, u, clientID)
 	}
 	// Cheap ordering check before the crypto and the employer read.
 	if !fix.At.After(open.ClockIn.At) {
@@ -239,20 +239,29 @@ func (h *Handler) ClockOut(c echo.Context) error {
 
 	e, err := h.store.ClockOut(ctx, u, open, clientID, fix)
 	if errors.Is(err, ErrEntryNotOpen) {
-		// Lost the race to a concurrent close: either it was this same close
-		// replayed in parallel, or the shift is genuinely gone.
-		if closed, findErr := h.store.ByCloseClientID(ctx, u.ID, clientID); findErr != nil {
-			return findErr
-		} else if closed != nil {
-			return h.respond(c, http.StatusOK, u, closed)
-		}
-		return httpx.NoOpenEntry()
+		return h.closedOrConflict(c, u, clientID)
 	}
 	if err != nil {
 		return err
 	}
 	// 200, not 201: closing a shift updates the entry created at clock-in.
 	return h.respond(c, http.StatusOK, u, e)
+}
+
+// closedOrConflict answers a clock-out that found nothing to close. The
+// pre-flight idempotency lookup can run a moment before a concurrent replay of
+// this same close commits, so the shift may already be closed under this very
+// client_id — that is a replay and must answer with the entry. Only a genuinely
+// missing shift is a conflict.
+func (h *Handler) closedOrConflict(c echo.Context, u *user.User, clientID string) error {
+	closed, err := h.store.ByCloseClientID(c.Request().Context(), u.ID, clientID)
+	if err != nil {
+		return err
+	}
+	if closed != nil {
+		return h.respond(c, http.StatusOK, u, closed)
+	}
+	return httpx.NoOpenEntry()
 }
 
 type pingBody struct {
