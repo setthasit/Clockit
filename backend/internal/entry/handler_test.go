@@ -154,6 +154,64 @@ func TestPingsFlagImpossibleSpeed(t *testing.T) {
 	}
 }
 
+// "Last seen" is everything the employer learns from a ping, so it has to reach
+// their payload — and it must never move backwards, because the outbox can flush
+// a batch that waited out a dead zone after a fresher one.
+func TestPingsAdvanceLastSeenAndNeverRewindIt(t *testing.T) {
+	ctx := context.Background()
+	s, worker := testStore(t)
+	db := s.entries.Database()
+	if _, err := db.Collection("users").InsertOne(ctx, worker); err != nil {
+		t.Fatal(err)
+	}
+	employers := employer.NewStore(db, s.env)
+	owner := bson.NewObjectID()
+	emp, err := employers.Create(ctx, owner, "Cafe", "Asia/Bangkok", employer.LatLng{Lat: vanLat, Lng: vanLng})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := msTime(time.Now().UTC().Add(-time.Hour))
+	open, _, err := s.ClockIn(ctx, worker, &emp.ID, "c-1", Fix{Lat: vanLat, Lng: vanLng, AccuracyM: 10, At: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(s, employers, config.Config{SpeedAnomalyKMH: 200})
+
+	stored, err := s.ByID(ctx, worker.ID, open.ID)
+	if err != nil || stored.LastPingAt != nil {
+		t.Fatalf("last_ping_at on a fresh entry = %v, %v, want nil", stored.LastPingAt, err)
+	}
+
+	newest := base.Add(20 * time.Minute)
+	body := `{"pings":[` +
+		pingJSON(base.Add(10*time.Minute), vanLat, vanLng) + `,` +
+		pingJSON(newest, vanLat, vanLng) + `]}`
+	if rec := postPings(t, h, worker, body); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body)
+	}
+	if stored, err = s.ByID(ctx, worker.ID, open.ID); err != nil || stored.LastPingAt == nil {
+		t.Fatalf("ByID = %+v, %v", stored, err)
+	}
+	if !stored.LastPingAt.Equal(newest) {
+		t.Fatalf("last_ping_at = %s, want the newest fix in the batch (%s)", stored.LastPingAt, newest)
+	}
+
+	// A batch queued before the one above, flushed after it.
+	late := `{"pings":[` + pingJSON(base.Add(5*time.Minute), vanLat, vanLng) + `]}`
+	if rec := postPings(t, h, worker, late); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body)
+	}
+	if stored, err = s.ByID(ctx, worker.ID, open.ID); err != nil || !stored.LastPingAt.Equal(newest) {
+		t.Fatalf("last_ping_at = %v, %v, want it held at %s", stored.LastPingAt, err, newest)
+	}
+
+	rec := getEmployerEntries(t, h, &user.User{ID: owner}, emp.ID)
+	if want := `"last_ping_at":"` + newest.Format(time.RFC3339Nano) + `"`; !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("body = %s, want it to carry %s", rec.Body, want)
+	}
+}
+
 func TestPingFixesValidatesAndOrdersTheBatch(t *testing.T) {
 	now := msTime(time.Now().UTC())
 	loc := &locBody{Lat: ptr(vanLat), Lng: ptr(vanLng)}

@@ -294,6 +294,18 @@ func (s *Store) AddPings(ctx context.Context, u *user.User, entryID bson.ObjectI
 	return len(res.InsertedIDs), nil
 }
 
+// TouchLastPing advances the entry's "last seen" to the newest fix in a batch.
+//
+// $max, not $set: the outbox flushes whatever it queued, and a batch that waited
+// out a dead zone can land after a fresher one. $max also writes the field when
+// it is missing, so the first batch needs no separate insert path.
+func (s *Store) TouchLastPing(ctx context.Context, e *Entry, at time.Time) error {
+	_, err := s.entries.UpdateOne(ctx,
+		bson.M{"_id": e.ID, "user_id": e.UserID},
+		bson.M{"$max": bson.M{"last_ping_at": msTime(at)}})
+	return err
+}
+
 // Flag records an advisory verdict on an entry. $addToSet makes it idempotent,
 // so a shift that keeps tripping the same rule carries the flag once.
 //

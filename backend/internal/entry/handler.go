@@ -356,6 +356,11 @@ func (h *Handler) Pings(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	// pingFixes sorted the batch, so the last fix is its newest. This is the only
+	// thing the employer learns from a ping (design §5.4: "last seen", not a track).
+	if err := h.store.TouchLastPing(ctx, open, fixes[len(fixes)-1].At); err != nil {
+		return err
+	}
 	if anomaly {
 		if err := h.store.Flag(ctx, open, flagSpeedAnomaly); err != nil {
 			return err
@@ -455,6 +460,10 @@ type employerView struct {
 	DurationMinutes  *int64   `json:"duration_minutes"`
 	LocationVerified bool     `json:"location_verified"`
 	Flags            []string `json:"flags"`
+	// LastPingAt is when the phone last reported in during the shift, null until
+	// the first batch lands. A timestamp only: it says the worker's phone is still
+	// on shift and still reporting, never where it is.
+	LastPingAt *time.Time `json:"last_ping_at"`
 }
 
 // EmployerList is the calendar and table feed: every shift booked to one
@@ -506,6 +515,7 @@ func newEmployerView(e *Entry, u employer.UserRef) employerView {
 		ClockInAt:        e.ClockIn.At,
 		LocationVerified: e.LocationVerified,
 		Flags:            e.Flags,
+		LastPingAt:       e.LastPingAt,
 	}
 	if v.Flags == nil {
 		v.Flags = []string{}

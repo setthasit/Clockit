@@ -46,7 +46,12 @@ type Entry struct {
 	ClockOut         *ClockPoint `bson:"clock_out,omitempty"`
 	LocationVerified bool        `bson:"location_verified"`
 	Flags            []string    `bson:"flags"`
-	CreatedAt        time.Time   `bson:"created_at"`
+	// LastPingAt is the newest breadcrumb's own capture time, denormalised off
+	// location_pings so the employer's "last seen" costs no second query per row.
+	// A time, never a coordinate: the employer sees that the phone still reports,
+	// not where from (design §5.4).
+	LastPingAt *time.Time `bson:"last_ping_at,omitempty"`
+	CreatedAt  time.Time  `bson:"created_at"`
 }
 
 // LocationPing is a mid-shift breadcrumb, sealed with the user's DEK and expired
