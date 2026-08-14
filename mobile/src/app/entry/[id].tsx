@@ -402,7 +402,14 @@ const styles = StyleSheet.create({
   // 48 pt targets, matching the clock and History screens' inline actions.
   row: { minHeight: 48, justifyContent: "center" },
   rowLabel: { color: theme.brand, fontSize: 17, fontWeight: "600" },
-  action: { alignSelf: "flex-start", minHeight: 48, justifyContent: "center" },
+  // minWidth too: alignSelf shrinks the row to its label, and a short one lands under the 44 pt
+  // minimum with no horizontal padding to make it up.
+  action: {
+    alignSelf: "flex-start",
+    minHeight: 48,
+    minWidth: 48,
+    justifyContent: "center",
+  },
   actionLabel: { color: theme.brand, fontSize: 16, fontWeight: "600" },
   pressed: { opacity: 0.6 },
   errorBox: { gap: theme.spacing.s / 2 },

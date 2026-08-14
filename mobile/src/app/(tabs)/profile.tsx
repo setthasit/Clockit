@@ -1,5 +1,5 @@
 import Constants from "expo-constants";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -66,6 +66,7 @@ export default function Profile() {
   const [confirming, setConfirming] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  const signOutInFlight = useRef(false);
 
   // The gate loads `me` before it mounts the tabs (app/_layout.tsx), so this is unreachable in
   // practice — but it is also the exact moment a sign-out passes through, and rendering someone
@@ -114,15 +115,26 @@ export default function Profile() {
   };
 
   const runSignOut = async () => {
+    // The actual guard, the same idiom and the same reason as the clock screen's: `disabled` lands
+    // a render late, so two taps in one JS tick both read `signingOut === false`. The second
+    // clearSession() rejects TRANSACTION_ACTIVE_ALREADY — not USER_CANCELLED — and falls through to
+    // clearCredentials(), wiping local state while the first browser logout is still open and still
+    // refusable. That is exactly the cancel-safety lib/signOut.ts is ordered to protect.
+    if (signOutInFlight.current) return;
+    signOutInFlight.current = true;
     setSigningOut(true);
     setSignOutError(null);
-    const result = await signOut({ clearSession, clearCredentials });
-    // Nothing is set on success: the wipe clears `me`, the gate re-renders on it and this screen
-    // unmounts. A cancel keeps the confirmation open with no message — the choice is not lost, and
-    // backing out of a browser dialog needs no explanation.
-    if (!result.done) {
-      setSignOutError(result.message);
-      setSigningOut(false);
+    try {
+      const result = await signOut({ clearSession, clearCredentials });
+      // Nothing is set on success: the wipe clears `me`, the gate re-renders on it and this screen
+      // unmounts. A cancel keeps the confirmation open with no message — the choice is not lost,
+      // and backing out of a browser dialog needs no explanation.
+      if (!result.done) {
+        setSignOutError(result.message);
+        setSigningOut(false);
+      }
+    } finally {
+      signOutInFlight.current = false;
     }
   };
 
@@ -302,11 +314,13 @@ export default function Profile() {
             accessibilityRole="button"
             accessibilityState={{ busy: signingOut, disabled: signingOut }}
             disabled={signingOut}
-            // Straight through when the queue is empty: a confirmation for an action that costs
-            // nothing is a step that teaches people to tap past confirmations.
-            onPress={() =>
-              queued > 0 ? setConfirming(true) : void runSignOut()
-            }
+            // Always confirms, never straight through on `queued === 0`. That branch read the
+            // count, and the count is 0 while the outbox rehydrate is still in flight — so the one
+            // moment it could skip the warning is a moment it cannot know there is nothing to warn
+            // about. stores/outbox.ts calls warn-or-flush a correctness rule, and the cost of
+            // honouring it unconditionally is one tap on a queue that was empty anyway. The reveal
+            // also re-reads `queued` on the second tap, by which time the rehydrate has landed.
+            onPress={() => setConfirming(true)}
             style={({ pressed }) => [styles.action, pressed && styles.pressed]}
           >
             {signingOut ? (
@@ -355,7 +369,15 @@ const styles = StyleSheet.create({
     fontSize: 17,
   },
   actions: { flexDirection: "row", gap: theme.spacing.l },
-  action: { alignSelf: "flex-start", minHeight: 48, justifyContent: "center" },
+  // minWidth as well as minHeight: alignSelf shrinks the row to the text, and "Save" is ~35 pt
+  // wide — under the 44 pt minimum in both platforms' guidance, with no horizontal padding here to
+  // make it up.
+  action: {
+    alignSelf: "flex-start",
+    minHeight: 48,
+    minWidth: 48,
+    justifyContent: "center",
+  },
   actionLabel: { color: theme.brand, fontSize: 16, fontWeight: "600" },
   dangerLabel: { color: theme.danger, fontSize: 16, fontWeight: "600" },
   pressed: { opacity: 0.6 },

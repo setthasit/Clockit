@@ -15,6 +15,13 @@ import {useSessionStore} from '@/stores/session';
  * where the message is drawn.
  *
  * **The queue is not scoped to a user** (stores/outbox.ts). Everything here exists because of that.
+ *
+ * ponytail: this is not the only way out of a session — an unrecoverable 401 ends one too
+ * (app/_layout.tsx), and that path deliberately keeps the queue, because a 401 is retryable and the
+ * same worker's unsent hours must survive it. So a worker who is 401'd out and replaced on a shared
+ * phone leaves their queue behind for the next sign-in to flush under a different Auth0 sub.
+ * Ceiling: exactly that hand-over. Upgrade path is outbox.ts's per-sub scoping, which 9.1 inherits
+ * along with the flush triggers that would fire the queue.
  */
 
 /**
@@ -50,9 +57,11 @@ type Auth0SignOut = {
  *  - **clock** — `reset()`, which also bumps the store's write generation. Without that bump a
  *    `hydrateFromServer()` already in flight — issued with the previous worker's token — lands its
  *    answer afterwards and puts their open shift, and their coordinates, back on screen.
- *  - **session** — `clear()`, which is the one that flips the gate's `me` to null. Deliberately
- *    last: the other two are data, this one is the UI, and clearing it first would start a
- *    re-render (and possibly a `loadMe`) over a queue that is still the old worker's.
+ *  - **session** — `clear()`, which is the one that flips the gate's `me` to null. Last by
+ *    defence, not by guarantee: all three calls are synchronous inside one task and React batches,
+ *    so nothing can currently interleave and inverting the order is unobservable (there is nothing
+ *    here to test). It stays last because data-before-UI costs nothing and is the order that keeps
+ *    holding if any of the three ever grows an async step or an out-of-batch subscriber.
  *
  * **ui is deliberately not cleared.** `locationExplainerSeen` is device-scoped by construction
  * (stores/ui.ts) and holds nothing about the user, so it leaks nothing. Clearing it would re-show a

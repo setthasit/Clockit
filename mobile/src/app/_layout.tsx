@@ -12,6 +12,7 @@ import { Auth0Provider, useAuth0 } from "react-native-auth0";
 
 import { ApiError } from "@/api/client";
 import { theme } from "@/lib/theme";
+import { useClockStore } from "@/stores/clock";
 // Importing auth0Config also arms the api() auth handlers (stores/session.ts registers them at
 // module scope), so no request can be issued before a token source exists.
 import { auth0Config, useSessionStore } from "@/stores/session";
@@ -114,8 +115,19 @@ function Gate() {
           // hasCreds has to be invalidated by hand: when `user` was already null (a renew that
           // failed on launch), LOGOUT_COMPLETE changes nothing the keychain effect depends on, so
           // it never re-runs and the gate would sit on a spinner forever.
+          //
+          // reset() because this is the *other* way out of a session, and useClockStore is module
+          // scope: it survives the gate flip, the sign-in screen and the next sign-in. Without it
+          // the next worker on a shared phone renders the previous one's open shift — and its
+          // coordinates — from mount until a GET /v1/entries lands, which offline is never
+          // (stores/clock.ts never clears state on a failed hydrate). Only the clock store: the
+          // outbox must survive a 401 (`retryable` returns true for it) so the *same* worker's
+          // unsent hours are recoverable. Clock state is server-authoritative; queued hours are not.
           clearCredentials()
-            .then(() => setHasCreds(false))
+            .then(() => {
+              useClockStore.getState().reset();
+              setHasCreds(false);
+            })
             .catch(() => setMeError(e.message));
           return;
         }
