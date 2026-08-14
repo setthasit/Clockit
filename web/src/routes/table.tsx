@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import {useSearchParams} from 'react-router';
+import {Badge} from '@astryxdesign/core/Badge';
 import {Banner} from '@astryxdesign/core/Banner';
 import {Button} from '@astryxdesign/core/Button';
 import type {ISODateString} from '@astryxdesign/core/Calendar';
@@ -10,6 +11,7 @@ import {
   type DateRangePreset,
 } from '@astryxdesign/core/DateRangeInput';
 import {EmptyState} from '@astryxdesign/core/EmptyState';
+import {Icon} from '@astryxdesign/core/Icon';
 import {HStack, VStack} from '@astryxdesign/core/Layout';
 import {Spinner} from '@astryxdesign/core/Spinner';
 import {StatusDot} from '@astryxdesign/core/StatusDot';
@@ -19,6 +21,7 @@ import {TipCell} from '../components/TipCell';
 import {api} from '../lib/api';
 import {reportToCsv} from '../lib/csv';
 import {useActiveEmployer} from '../lib/employer';
+import {flagExplanation, flagLabel} from '../lib/flags';
 import {cents, dayLabel, minutesToHM} from '../lib/format';
 import {buildRows, shiftsByMemberDay, type Report, type Row} from '../lib/report';
 import type {EmployerEntry, ReportDay} from '../lib/types';
@@ -31,6 +34,10 @@ import {
   weekStartOf,
   type DayKey,
 } from '../lib/week';
+
+// Deduped across the member's shifts for that day: two flagged shifts are still one thing for
+// the employer to look at, and a row repeating "Speed anomaly" twice says nothing extra.
+const rowFlags = (row: Row): string[] => [...new Set(row.shifts.flatMap((s) => s.flags))];
 
 const asRange = (start: DayKey, end: DayKey): DateRange => ({
   start: start as ISODateString,
@@ -141,6 +148,9 @@ export function TableRoute() {
   const isFetching = settled !== `${from}|${to}|${attempt}|${tz}`;
   const rows = loaded ? buildRows(loaded, tz, from, to) : [];
   const hasUnverified = rows.some((row) => row.isUnverified);
+  // Only the flags actually on screen get a legend line: an employer should not be taught to
+  // recognise a chip this range does not contain.
+  const shownFlags = [...new Set(rows.flatMap(rowFlags))];
   const columns = useMemo(() => columnsFor(reload), [reload]);
 
   // The file is the rows on screen — reportToCsv rebuilds them from this same report, and
@@ -238,6 +248,18 @@ export function TableRoute() {
         </HStack>
       )}
 
+      {/* Same argument as the dot's legend, one step further: a chip labelled "Speed anomaly"
+          names the check without saying what it measured, and the backend never rejects on it —
+          so the wording stays about the measurement rather than about the worker. */}
+      {shownFlags.map((flag) => {
+        const explanation = flagExplanation(flag);
+        return explanation === null ? null : (
+          <Text key={flag} type="supporting" color="secondary">
+            {flagLabel(flag)}: {explanation.toLowerCase()}.
+          </Text>
+        );
+      })}
+
       {loaded?.days.length === 0 && (
         <EmptyState
           title="Nothing to pay in this range"
@@ -283,6 +305,17 @@ function columnsFor(onTipSaved: () => void): TableColumn<Row>[] {
               />
             )}
             {summary(row, row.label)}
+            {/* The same verdict the calendar draws as a ⚠ on the bar. A chip rather than a dot,
+                because unlike the location verdict this one has a name the employer has to read
+                to know which check it failed; the legend under the table says what it means. */}
+            {rowFlags(row).map((flag) => (
+              <Badge
+                key={flag}
+                variant="warning"
+                icon={<Icon icon="warning" size="xsm" />}
+                label={flagLabel(flag)}
+              />
+            ))}
             {row.tip && <TipCell day={row.tip.day} cents={row.tip.cents} onSaved={onTipSaved} />}
           </HStack>
           {row.note && (
