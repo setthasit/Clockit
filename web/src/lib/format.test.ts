@@ -1,5 +1,5 @@
 import {expect, test} from 'vitest';
-import {cents, dayLabel, dollars, minutesToHM, timeRange, toCents} from './format';
+import {cents, dayLabel, dollars, lastSeen, minutesToHM, timeRange, toCents} from './format';
 
 test('cents renders integer cents as dollars', () => {
   expect(cents(1800)).toBe('$18.00');
@@ -87,4 +87,38 @@ test('dayLabel uses the employer timezone for instants and keeps report day keys
   // behind UTC that would roll it back, nor in one ahead that would roll it forward.
   expect(dayLabel('2026-03-15', 'America/New_York')).toBe('Sun, Mar 15');
   expect(dayLabel('2026-03-15', 'Asia/Tokyo')).toBe('Sun, Mar 15');
+});
+
+test('lastSeen degrades to a verdict-free line once a ping interval is missed', () => {
+  const now = Date.parse('2026-03-15T13:00:00Z');
+
+  expect(lastSeen('2026-03-15T12:59:30Z', now)).toEqual({
+    label: 'Last seen just now',
+    isStale: false,
+  });
+  expect(lastSeen('2026-03-15T12:48:00Z', now)).toEqual({
+    label: 'Last seen 12 min ago',
+    isStale: false,
+  });
+
+  // Past one missed ten-minute interval plus slack the count stops being informative: iOS
+  // batches and defers deliveries, so a gap is ordinary and must not read as an accusation.
+  expect(lastSeen('2026-03-15T12:35:00Z', now)).toEqual({
+    label: 'No recent signal',
+    isStale: true,
+  });
+
+  // No ping at all is a different sentence from a gap — a foreground-only shift, or one that
+  // has not reached its first ten minutes.
+  expect(lastSeen(null, now)).toEqual({label: 'No check-ins yet', isStale: true});
+  expect(lastSeen('not-a-timestamp', now)).toEqual({
+    label: 'No check-ins yet',
+    isStale: true,
+  });
+
+  // A phone whose clock runs fast must not report being seen in the future.
+  expect(lastSeen('2026-03-15T13:05:00Z', now)).toEqual({
+    label: 'Last seen just now',
+    isStale: false,
+  });
 });

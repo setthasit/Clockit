@@ -72,4 +72,8 @@ export interface EmployerEntry {
   location_verified: boolean;
   /** Never null; [] when clean. Only value today: "speed_anomaly". */
   flags: string[];
+  /** When the worker's phone last checked in during the shift, or null if it never has —
+   * a foreground-only shift, or one that has not reached its first ten-minute ping yet.
+   * A time, never a place: the employer sees that a shift is still running, not a track. */
+  last_ping_at: string | null;
 }

@@ -34,6 +34,7 @@ function entry(overrides: Partial<EmployerEntry> = {}): EmployerEntry {
     duration_minutes: 513,
     location_verified: true,
     flags: [],
+    last_ping_at: null,
     ...overrides,
   };
 }

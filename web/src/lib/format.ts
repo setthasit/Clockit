@@ -73,6 +73,37 @@ export function dayLabel(date: string, tz: string): string {
   }).format(d);
 }
 
+/**
+ * How long ago the phone on an open shift last checked in.
+ *
+ * `isStale` is the whole point of the return shape: past one missed ten-minute interval plus
+ * slack the number stops being informative and starts being an accusation, so it is not shown at
+ * all — design §5.4 is explicit that iOS batches and defers deliveries and stops entirely when
+ * the app is force-quit, so a gap is ordinary and says nothing about whether someone is working.
+ * The caller renders a stale reading in muted text; the clock events remain the record either way.
+ *
+ * A null `iso` is a shift with no ping yet: foreground-only permission, or the first ten minutes.
+ * That is a different sentence from a gap, and neither is a fault.
+ */
+export function lastSeen(
+  iso: string | null,
+  now: number = Date.now(),
+): {label: string; isStale: boolean} {
+  const d = iso ? toDate(iso) : null;
+  if (!d) return {label: 'No check-ins yet', isStale: true};
+
+  // Rounded down and floored at zero: a phone whose clock runs a minute fast must not produce
+  // "last seen in 1 min".
+  const minutes = Math.max(0, Math.floor((now - d.getTime()) / 60_000));
+  if (minutes >= STALE_AFTER_MIN) return {label: 'No recent signal', isStale: true};
+  if (minutes < 1) return {label: 'Last seen just now', isStale: false};
+  return {label: `Last seen ${minutes} min ago`, isStale: false};
+}
+
+// One missed ten-minute interval plus slack for iOS's deferred deliveries. Not a threshold
+// anything is judged on — only the point where a minute count stops meaning anything.
+const STALE_AFTER_MIN = 25;
+
 /** Shift bounds — "9:02–17:35"; an open shift (no clock-out) renders "9:02–now". */
 export function timeRange(inISO: string, outISO: string | null | undefined, tz: string): string {
   const start = clockTime(inISO, tz);
