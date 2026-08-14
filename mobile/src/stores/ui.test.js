@@ -99,11 +99,23 @@ test('a storage backend that rejects still hydrates', () => {
 test('hydrated is never persisted, so every launch starts false', async () => {
   first.store.getState().markLocationExplainerSeen();
   await settle();
-  assert.deepEqual(JSON.parse(items.get(KEY)).state, {locationExplainerSeen: true});
+  assert.deepEqual(JSON.parse(items.get(KEY)).state, {
+    locationExplainerSeen: true,
+    backgroundPromptSeen: false,
+  });
 
   // The same storage, a new launch: the flag the user set comes back, the hydration bit does not.
   const relaunch = await launch('relaunch', items.get(KEY));
   assert.equal(relaunch.store.getInitialState().hydrated, false);
   assert.equal(relaunch.state.hydrated, true);
   assert.equal(relaunch.state.locationExplainerSeen, true);
+});
+
+// The store has no `version`/`migrate`, so this is what carries a phone upgrading across a
+// schema change: a blob written before a field existed must land on that field's default rather
+// than on undefined, which reads as "already asked" nowhere but would if a flag were inverted.
+test('a blob written before a flag existed keeps the flag on its default', async () => {
+  const old = await launch('phase-3-blob', '{"state":{"locationExplainerSeen":true},"version":0}');
+  assert.equal(old.state.locationExplainerSeen, true);
+  assert.equal(old.state.backgroundPromptSeen, false);
 });

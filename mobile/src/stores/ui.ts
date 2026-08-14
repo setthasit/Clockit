@@ -5,7 +5,11 @@ import {createJSONStorage, persist} from 'zustand/middleware';
 type UiState = {
   hydrated: boolean;
   locationExplainerSeen: boolean;
+  /** The on-shift tracking pitch has been put to this worker once. Whatever they answered — a
+   * grant, a refusal, or walking away from Android's settings page — it is never put again. */
+  backgroundPromptSeen: boolean;
   markLocationExplainerSeen(): void;
+  markBackgroundPromptSeen(): void;
 };
 
 /**
@@ -15,10 +19,15 @@ type UiState = {
  *
  * `locationExplainerSeen` has to survive relaunch. "Not now" leaves the OS permission
  * `undetermined`, so a launch gate keyed on the OS status alone would put the same blocking screen
- * in front of the user every single cold start, forever.
+ * in front of the user every single cold start, forever. `backgroundPromptSeen` is the same rule
+ * one shift later: on Android 11+ the Always request opens Settings rather than a dialog, so a
+ * worker who backs out of it leaves the status undetermined too, and the pitch would return on
+ * every employer shift they ever work.
  *
- * ponytail: one flag, no versioning/migrate. Ceiling: a rename of this key silently re-shows the
- * explainer once. Upgrade path: add `version` + `migrate` when a second field arrives.
+ * ponytail: still no versioning/migrate. Adding a field needs none — persist's shallow merge
+ * leaves an older blob's missing key on its default — so the ceiling is unchanged: a rename of
+ * this key silently re-shows both prompts once. Upgrade path: `version` + `migrate` on the first
+ * change that *reshapes* a stored field rather than adding one.
  */
 export const useUiStore = create<UiState>()(
   persist(
@@ -29,8 +38,10 @@ export const useUiStore = create<UiState>()(
       // lives in state instead.
       hydrated: false,
       locationExplainerSeen: false,
+      backgroundPromptSeen: false,
 
       markLocationExplainerSeen: () => set({locationExplainerSeen: true}),
+      markBackgroundPromptSeen: () => set({backgroundPromptSeen: true}),
     }),
     {
       name: 'clockit-ui',
@@ -38,7 +49,10 @@ export const useUiStore = create<UiState>()(
       // `hydrated` is kept out of what gets written, not out of writing: setState() below still
       // goes through persist's wrapped api.setState, so every cold launch rewrites the same
       // `locationExplainerSeen` payload once. One small write, not worth avoiding.
-      partialize: ({locationExplainerSeen}) => ({locationExplainerSeen}),
+      partialize: ({locationExplainerSeen, backgroundPromptSeen}) => ({
+        locationExplainerSeen,
+        backgroundPromptSeen,
+      }),
       // Runs after rehydration *and* after a read error (persist calls it with the error instead of
       // the state); unconditional so a corrupt or unreadable store leaves the user on the defaults
       // rather than on the gate's spinner forever. ui.test.js pins both failure paths.

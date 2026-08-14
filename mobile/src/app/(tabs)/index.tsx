@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import type { Fix } from "@/api/types";
+import { BackgroundSheet } from "@/components/BackgroundSheet";
 import { ClockButton } from "@/components/ClockButton";
 import { DistanceBadge } from "@/components/DistanceBadge";
 import { EmployerSheet } from "@/components/EmployerSheet";
@@ -23,10 +24,19 @@ import {
 import { formatClock, formatDuration } from "@/lib/format";
 import { theme } from "@/lib/theme";
 import { getFix } from "@/location/fix";
+import { requestShiftTracking, syncShiftTracking } from "@/location/tracking";
 import { useClockStore } from "@/stores/clock";
 import { useSessionStore } from "@/stores/session";
+import { useUiStore } from "@/stores/ui";
 
 const FIX_POLL_MS = 15_000;
+
+// Shown once, after the on-shift tracking pitch is turned down. Deliberately says nothing about
+// *why* it is off: on Android 11+ the request opens Settings rather than a dialog, so at this
+// point the app genuinely does not know whether the worker refused or is still deciding. Both
+// readings are true of this sentence, and both have the same consequence.
+const BACKGROUND_DECLINED =
+  "Check-ins are off. Your shift still records — your employer just won't see it running in between.";
 
 export default function Clock() {
   const openEntry = useClockStore((s) => s.openEntry);
@@ -37,6 +47,15 @@ export default function Clock() {
   // Never auto-requests; the explainer at /permissions owns the prompt. `permission` is null until
   // the first read resolves, which is why "blocked" below is not simply `!granted`.
   const [permission, , refreshPermission] = Location.useForegroundPermissions();
+  // Read on mount, never requested by the hook: the sheet below owns the ask, and it only ever
+  // happens on an employer shift. Refreshed on foreground beside the other one, because Android
+  // answers this permission in Settings rather than in a dialog.
+  const [backgroundPermission, , refreshBackgroundPermission] =
+    Location.useBackgroundPermissions();
+  const backgroundPromptSeen = useUiStore((s) => s.backgroundPromptSeen);
+  const markBackgroundPromptSeen = useUiStore((s) => s.markBackgroundPromptSeen);
+  const [askingBackground, setAskingBackground] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   // Owned here, not inside DistanceBadge: task 6.3's EmployerSheet needs a live distance per
   // membership from the same reading, and two 15 s pollers on one screen would be a defect. The
@@ -59,14 +78,17 @@ export default function Clock() {
     inFlight.current = true;
     setBusy(true);
     setError(null);
+    // The tracking notice is about the *previous* shift's answer; a new tap makes it stale, and
+    // a worker who has since turned Always on in Settings would otherwise keep reading it.
+    setNotice(null);
     try {
       const { done, message } = await act();
       setError(message);
       if (done) setSheetOpen(false);
     } catch {
-      // clockFlow resolves rather than rejects for everything it owns, so this is a bug in ours
-      // (or in a phase-5 tracking hook). Caught anyway: the alternative is an unhandled rejection
-      // and a button that has already committed an optimistic write with no way to say so.
+      // clockFlow resolves rather than rejects for everything it owns, so this is a bug in ours.
+      // Caught anyway: the alternative is an unhandled rejection and a button that has already
+      // committed an optimistic write with no way to say so.
       setError(UNEXPECTED_ERROR);
     } finally {
       inFlight.current = false;
@@ -127,10 +149,16 @@ export default function Clock() {
       setForeground(AppState.currentState !== "background");
       const sub = AppState.addEventListener("change", (state) => {
         setForeground(state !== "background");
-        if (state === "active") refreshPermission().catch(() => {});
+        if (state !== "active") return;
+        refreshPermission().catch(() => {});
+        // Android 11+ answers the Always request in Settings, so the grant lands on the way back
+        // into the app rather than in the promise the sheet awaited. Both of these are that
+        // answer arriving: the status the sheet's condition reads, and the tracking it enables.
+        refreshBackgroundPermission().catch(() => {});
+        syncShiftTracking();
       });
       return () => sub.remove();
-    }, [refreshPermission]),
+    }, [refreshPermission, refreshBackgroundPermission]),
   );
 
   // Whole minutes: formatDuration rounds, and a stopwatch that reads "1m" 30 seconds in is wrong
@@ -156,6 +184,37 @@ export default function Clock() {
     ? (memberships?.find((m) => m.employer.id === openEntry.employer_id)
         ?.employer.name ?? "Employer")
     : "Personal";
+
+  // The pitch for on-shift check-ins, put once and only where it is justified: an *employer*
+  // shift that is actually running (design §5.4 — minimum data; a personal entry gives an
+  // employer nothing to see, so there is nothing to trade for). Rendered from state rather than
+  // fired from the clock-in handler, so it survives a relaunch mid-shift and needs no callback
+  // threaded back through clockFlow.
+  //
+  // `canAskAgain` rather than the status: it is the one flag that answers "will asking do
+  // anything", and it covers both platforms' shapes — iOS reports a When-In-Use grant as
+  // undetermined for the Always requester, Android reports its own re-askable denial.
+  const askBackground =
+    openEntry?.employer_id != null &&
+    !backgroundPromptSeen &&
+    backgroundPermission != null &&
+    !backgroundPermission.granted &&
+    backgroundPermission.canAskAgain;
+
+  // Marked seen on every path out, including a throw: a request that raised no prompt (web, or a
+  // build without the native module) must not put this sheet back up on the next render loop.
+  const answerBackground = async (allow: boolean) => {
+    setAskingBackground(true);
+    try {
+      if (allow && (await requestShiftTracking())) return;
+      setNotice(BACKGROUND_DECLINED);
+    } catch {
+      // Nothing was asked and nothing can be: no copy claiming the worker chose this.
+    } finally {
+      markBackgroundPromptSeen();
+      setAskingBackground(false);
+    }
+  };
 
   const granted = permission?.granted === true;
   // ponytail: the null guard keeps "Open settings" from flashing on every cold launch, and pays for
@@ -287,6 +346,14 @@ export default function Clock() {
           </Text>
         )}
 
+        {/* Muted, never red: nothing failed. The shift is recording either way, which is what
+            this line exists to say. */}
+        {notice != null && (
+          <Text accessibilityLiveRegion="polite" style={styles.notice}>
+            {notice}
+          </Text>
+        )}
+
         {blocked && (
           <View style={styles.blocked}>
             <Text style={styles.blockedText}>
@@ -336,6 +403,18 @@ export default function Clock() {
           setError(null);
         }}
       />
+
+      {/* Mounted only while it is wanted, so answering it unmounts it — there is no "seen" state
+          here to keep in step with the persisted flag. */}
+      {askBackground && (
+        <BackgroundSheet
+          visible
+          employerName={employerName}
+          busy={askingBackground}
+          onAllow={() => void answerBackground(true)}
+          onDismiss={() => void answerBackground(false)}
+        />
+      )}
     </View>
   );
 }
@@ -376,6 +455,12 @@ const styles = StyleSheet.create({
   },
   error: {
     color: theme.danger,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "center",
+  },
+  notice: {
+    color: theme.muted,
     fontSize: 14,
     lineHeight: 20,
     textAlign: "center",
