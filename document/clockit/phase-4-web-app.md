@@ -16,7 +16,7 @@ Theme: set Astryx theme tokens so primary/accent = `#00286E`; light/dark follow 
 
 ## Tasks
 
-- [ ] Task 1: Scaffold
+- [x] Task 1: Scaffold
   - [x] 1.1: Astryx + Vite + router skeleton
   - [x] 1.2: `lib/api.ts` + `lib/format.ts`
 - [x] Task 2: Auth
@@ -156,7 +156,7 @@ Edit name/timezone/anchor (reuses `MapAnchorPicker`, prefilled from the employer
 - [x] 8.4: Employer switcher: second employer via onboarding; data scopes correctly on switch.
 - [x] 8.5: Non-owner token (employee-only user) gets clean "no employer yet" onboarding, and direct API calls to another's employer return 404 (spot-check in devtools).
 
-**8.1 / 8.2 results**: `npx tsc --noEmit` exit 0, `npm run lint` clean, `npm run build` clean (`dist/` = 0.45 kB html + 155 kB css + 894 kB js, 268 kB gzipped; Rolldown's >500 kB chunk advisory is the only output — code-splitting is a phase-6 hosting concern, not a build failure). `npx vitest run` 31/31 across four test files, and green under `TZ=UTC`, `America/New_York`, `Asia/Kolkata`, `America/Santiago`, `Pacific/Kiritimati` and `Asia/Kathmandu` — the timezone-dependent suites (`week`, `report`, `format`, `csv`) pin behaviour rather than the runner's zone. `csv.test.ts` covers the three mandated cases plus formula-injection escaping, the multi-shift join, blank-vs-`0.00`, and the undistributed-pool line.
+**8.1 / 8.2 results**: `npx tsc --noEmit` exit 0, `npm run lint` clean, `npm run build` clean (`dist/` = 0.45 kB html + 155 kB css + 894 kB js, 268 kB gzipped; Rolldown's >500 kB chunk advisory is the only output — code-splitting is a phase-6 hosting concern, not a build failure). `npx vitest run` 31/31 across four test files (33/33 across five once defect 1's `auth.test.ts` landed), and green under `TZ=UTC`, `America/New_York`, `Asia/Kolkata`, `America/Santiago`, `Pacific/Kiritimati` and `Asia/Kathmandu` — the timezone-dependent suites (`week`, `report`, `format`, `csv`) pin behaviour rather than the runner's zone. `csv.test.ts` covers the three mandated cases plus formula-injection escaping, the multi-shift join, blank-vs-`0.00`, and the undistributed-pool line.
 
 **8.3–8.5 results** — run against the live Auth0 tenant `clockit.ca.auth0.com`, the real Google Maps key, and `make seed` (re-seeded onto the signed-in account's sub with three employees, so `$100.00 ÷ 1410 min` forces a remainder).
 

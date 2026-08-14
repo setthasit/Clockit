@@ -14,33 +14,33 @@ Rules: no barrel files; components in `src/components` only when reused or >~80 
 
 ## Tasks
 
-- [ ] Task 1: Project scaffold
+- [x] Task 1: Project scaffold
   - [x] 1.1: create-expo-app + @expo/ui + theme
   - [x] 1.2: expo-router skeleton + app.json config
-- [ ] Task 2: Auth
+- [x] Task 2: Auth
   - [x] 2.1: Auth0 provider + session store
   - [x] 2.2: Sign-in screen + auth gate (auth half; location branch deferred to 4.2)
-- [ ] Task 3: API layer
+- [x] Task 3: API layer
   - [x] 3.1: `src/api/client.ts` fetch wrapper
   - [x] 3.2: Typed endpoints (`me.ts`, `entries.ts`)
-- [ ] Task 4: Location helpers
+- [x] Task 4: Location helpers
   - [x] 4.1: `src/location/fix.ts`
   - [x] 4.2: Permissions explainer screen
-- [ ] Task 5: Stores
+- [x] Task 5: Stores
   - [x] 5.1: `session.ts` + `clock.ts`
   - [x] 5.2: `outbox.ts` (persisted queue)
-- [ ] Task 6: Clock screen
+- [x] Task 6: Clock screen
   - [x] 6.1: Status card + elapsed timer + ClockButton
   - [x] 6.2: DistanceBadge (live pre-check)
   - [x] 6.3: EmployerSheet
   - [x] 6.4: Clock-in/out flow + error mapping
-- [ ] Task 7: History & entry detail
+- [x] Task 7: History & entry detail
   - [x] 7.1: History tab (grouped by day)
   - [x] 7.2: Entry detail + assign employer
-- [ ] Task 8: Profile tab
+- [x] Task 8: Profile tab
   - [x] 8.1: Profile screen + sign out
-- [ ] Task 9: Outbox sync
-  - [ ] 9.1: Flush triggers + replay
+- [x] Task 9: Outbox sync
+  - [x] 9.1: Flush triggers + replay
 - [ ] Task 10: Verification (manual checklist)
 
 ## Implementation Details
@@ -246,7 +246,7 @@ Flush on: NetInfo `isConnected` transition to true, AppState → `active`, succe
 - [ ] 10.5: Airplane mode clock-in → optimistic "waiting" state → disable airplane → auto-sync, entry visible in backend.
 - [ ] 10.6: Assign employer on a personal entry → badge reflects verification.
 - [ ] 10.7: Sign out clears everything; relaunch requires sign-in.
-- [ ] 10.8: `npx tsc --noEmit` and `npx expo-doctor` clean; iOS + Android dev builds run.
+- [x] 10.8: `npx tsc --noEmit` and `npx expo-doctor` clean; iOS + Android dev builds run.
 
 ### Phase completion notes (deviations from plan)
 
