@@ -53,6 +53,14 @@ type ClockState = {
   setOpen(e: Entry | null): void;
   /** Optimistic, not yet accepted: a local entry for a clock-in, null for a clock-out. */
   setPending(e: Entry | null): void;
+  /**
+   * Sign-out only (lib/signOut.ts). Not `setOpen(null)` plus a `setState` for `lastClosed`: this
+   * has to invalidate the write generation as well, and that counter is module-scope and reachable
+   * from nowhere else. A `hydrateFromServer()` already in flight was issued with the previous
+   * worker's token, so without the bump its answer lands after the wipe and puts their open shift
+   * — and the coordinates on it — back on a screen that now belongs to someone else.
+   */
+  reset(): void;
   hydrateFromServer(): Promise<void>;
 };
 
@@ -92,6 +100,11 @@ export const useClockStore = create<ClockState>((set) => ({
   setPending: (openEntry) => {
     writeGen++;
     set({openEntry, pendingSince: new Date().toISOString()});
+  },
+
+  reset: () => {
+    writeGen++;
+    set({openEntry: null, lastClosed: null, pendingSince: null});
   },
 
   // Unbounded window, deliberately not the plan's "today". Nothing ever ages an open entry out —

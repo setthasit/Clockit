@@ -2,7 +2,7 @@ import Auth0, {CredentialsManagerError, CredentialsManagerErrorCodes} from 'reac
 import {create} from 'zustand';
 
 import {ApiError, setApiAuth} from '@/api/client';
-import {getMe, type Me} from '@/api/me';
+import {getMe, type Me, type Profile} from '@/api/me';
 
 // Also spread into <Auth0Provider> in app/_layout.tsx. Sharing one object is not just DRY:
 // Auth0ClientFactory caches clients in a static Map keyed by a signature over
@@ -95,6 +95,10 @@ type SessionState = {
   me: Me | null;
   setToken(t: string | null): void;
   loadMe(): Promise<void>;
+  /** The answer to PATCH /v1/me (task 8.1). Memberships are untouched — that route never returns
+   * them, and refetching the envelope to learn what the response already said would cost a
+   * request. */
+  setProfile(p: Profile): void;
   clear(): void;
 };
 
@@ -112,6 +116,12 @@ export const useSessionStore = create<SessionState>((set) => ({
   // still-valid session. Callers hold their own error state — a `meError` field here would only
   // duplicate what the one screen that calls this already needs locally.
   loadMe: async () => set({me: await getMe()}),
+
+  // Guarded rather than a plain set, and the guard is the reason this lives here instead of the
+  // one screen that calls it: onUnauthorized() (or a sign-out) can clear the session while a save
+  // is in flight, and writing an envelope from here would put a signed-in user with no memberships
+  // back on screen — past the gate, with the clock tab offering only a personal shift.
+  setProfile: (user) => set((s) => (s.me ? {me: {...s.me, user}} : s)),
 
   // Local state only. Signing out of Auth0 (clearSession/clearCredentials) is task 8.1's job —
   // do not add it here, or 8.1 ends up clearing credentials twice.
