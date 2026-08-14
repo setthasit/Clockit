@@ -7,8 +7,8 @@
 // stores/clock.ts and lib/sync.ts are driven; only the two native event sources, AsyncStorage and
 // the endpoint functions are stubbed.
 //
-// Each test imports its own copy of sync.ts (`?tag`), because `running` and the NetInfo tri-state
-// are module scope: a leftover one would swallow or join the next test's trigger. The stores it
+// Each test imports its own copy of sync.ts (`?tag`), because `running` is module scope: a
+// leftover one would swallow or join the next test's trigger. The stores it
 // imports resolve to the same URLs, so they stay singletons — which is the point: it is the real
 // queue being drained each time. `outboxTag` below is the one deliberate exception.
 import assert from 'node:assert/strict';
@@ -24,8 +24,9 @@ const ENTRIES_STUB = 'stub:api-entries';
 // `@/stores/outbox` resolves to the singleton like every other `@/` import — the queue being
 // drained is the real one, shared with the clock store. Set this and the *next* module to import it
 // gets a fresh copy instead, which is the only way to reach the rehydration window from here: the
-// singleton's `hydrated` resolved once at module load, and reset() writes items through setState,
-// which bypasses persist entirely. Same harness stores/outbox.test.js uses (`./outbox.ts?window`).
+// singleton's `hydrated` resolved once at module load, and reset() writes through setState, which
+// never re-runs the rehydrate — so no blob planted in storage can be read back through merge.
+// Same harness stores/outbox.test.js uses (`./outbox.ts?window`).
 let outboxTag = '';
 
 registerHooks({
