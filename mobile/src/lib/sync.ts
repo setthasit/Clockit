@@ -38,15 +38,19 @@ async function run(): Promise<void> {
   // unrehydrated store reports 0 before *and* after a replay that really happened, so `after >=
   // before` skips the reconcile — and nothing else covers it: the clock store has no optimistic
   // entry to revert at launch, but it still owes the *server's* post-replay answer, and
-  // app/(tabs)/index.tsx's mount hydrate is not ordered after the replay and bumps no write
-  // generation, so its pre-replay answer stands. A relaunch with a queued clock-in then reads
-  // "Clocked out" until the next tap 409s its way through clockFlow.ts's HYDRATE_CODES.
+  // app/(tabs)/index.tsx's mount hydrate is not ordered after the replay, and the replay bumps no
+  // write generation of its own, so its pre-replay answer stands. A relaunch with a queued
+  // clock-in then reads "Clocked out" until the next tap 409s its way through clockFlow.ts's
+  // HYDRATE_CODES.
   await hydrated;
 
   const before = clockItems();
 
-  // Captured with it, for the same reason `after` is read again below: a live tap landing during
-  // the flush writes its own `pendingSince`, and the pill cleared at the end of this function
+  // Captured with it, and so behind the gate rather than in front of it: a tap landing inside the
+  // rehydration window is now part of `pendingBefore` and gets its pill cleared, where a capture
+  // ahead of the await would have read null and stranded it at the `pendingBefore != null` check
+  // below. Captured at all for the same reason `after` is read again below: a live tap landing
+  // during the flush writes its own `pendingSince`, and the pill cleared at the end of this function
   // would then be that tap's — a clock-out tapped while the last queued clock-in drains reads "on
   // shift, nothing pending" with a close still owed, the exact lie the `after === 0` guard exists
   // to prevent, arriving concurrently instead. Same shape as clock.ts's write ticket: capture,
@@ -154,11 +158,18 @@ export function startSync(): () => void {
   syncNow();
 
   // undefined until the first event, and that third state is what stops "is true" reading as
-  // "became true": NetInfo delivers the current state to a new subscriber immediately (State.add ->
-  // handler(latest)), so without it every arming would issue two syncs. Today the second would
-  // collapse on the `running` join — the flush above is issued synchronously, in this same tick —
-  // so this is belt and braces rather than the only defence. It stays because that collapse is an
-  // accident of ordering, and because the plan says *transition* either way.
+  // "became true": NetInfo hands a new subscriber the current state (State.add), so without it
+  // every arming would issue a second sync. *When* that arrives differs by arming, and the first
+  // one in a process is the case this guard is load-bearing for: `add` calls the handler
+  // synchronously only if `_latestState` is already populated, and index.ts constructs State
+  // lazily on the first addEventListener with a constructor whose `_fetchCurrentState()` is async
+  // — so at first arming `_latestState` is null and the `latest().then(handler)` branch is taken.
+  // That event lands a native round trip later, by which time the flush above may have settled and
+  // there is no `running` to join. Nothing catches it there but this comparison. What keeps the
+  // *launch* cheap even so is the depth check in run(), not the join: a flush that settled that
+  // fast found an empty queue, so a twin would drain nothing and return before the reconcile.
+  // Second and later armings do hit the synchronous branch and genuinely do collapse on the join.
+  // The plan says *transition* either way.
   //
   // `isConnected`, not `isInternetReachable`, which is deliberately weaker: reachability is a HEAD
   // to clients3.google.com, so it is null while in flight, stays false behind any captive portal

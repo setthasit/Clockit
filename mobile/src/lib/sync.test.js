@@ -7,9 +7,10 @@
 // stores/clock.ts and lib/sync.ts are driven; only the two native event sources, AsyncStorage and
 // the endpoint functions are stubbed.
 //
-// Each test imports its own copy of sync.ts (`?tag`), because the launch flush is once per
-// *process* by design. The stores it imports resolve to the same URLs, so they stay singletons —
-// which is the point: it is the real queue being drained each time.
+// Each test imports its own copy of sync.ts (`?tag`), because `running` and the NetInfo tri-state
+// are module scope: a leftover one would swallow or join the next test's trigger. The stores it
+// imports resolve to the same URLs, so they stay singletons — which is the point: it is the real
+// queue being drained each time. `outboxTag` below is the one deliberate exception.
 import assert from 'node:assert/strict';
 import {registerHooks} from 'node:module';
 import test from 'node:test';
@@ -19,6 +20,13 @@ const NETINFO_STUB = 'stub:netinfo';
 const RN_STUB = 'stub:react-native';
 const ASYNC_STORAGE_STUB = 'stub:async-storage';
 const ENTRIES_STUB = 'stub:api-entries';
+
+// `@/stores/outbox` resolves to the singleton like every other `@/` import — the queue being
+// drained is the real one, shared with the clock store. Set this and the *next* module to import it
+// gets a fresh copy instead, which is the only way to reach the rehydration window from here: the
+// singleton's `hydrated` resolved once at module load, and reset() writes items through setState,
+// which bypasses persist entirely. Same harness stores/outbox.test.js uses (`./outbox.ts?window`).
+let outboxTag = '';
 
 registerHooks({
   resolve(specifier, context, next) {
@@ -30,6 +38,9 @@ registerHooks({
       return {url: ASYNC_STORAGE_STUB, shortCircuit: true};
     }
     if (specifier === '@/api/entries') return {url: ENTRIES_STUB, shortCircuit: true};
+    if (specifier === '@/stores/outbox' && outboxTag) {
+      return {url: new URL(`stores/outbox.ts?${outboxTag}`, src).href, shortCircuit: true};
+    }
     if (specifier.startsWith('@/')) {
       return {url: new URL(`${specifier.slice(2)}.ts`, src).href, shortCircuit: true};
     }
@@ -37,10 +48,15 @@ registerHooks({
   },
   load(url, context, next) {
     // Modelled on the shipped State class, and the one behaviour that matters is the one a naive
-    // stub would smooth over: `add` hands a brand-new subscriber the latest state *immediately*
-    // (state.ts `add` -> `handler(this._latestState)`), so subscribing while online delivers
-    // `isConnected: true` with nothing having transitioned. Repeats are not filtered either —
-    // `_handleNativeStateUpdate` forwards every native event — hence `emit` with no equality check.
+    // stub would smooth over: `add` hands a brand-new subscriber the latest state with nothing
+    // having transitioned. It has *two* branches for that and they differ in timing, so both are
+    // modelled here — `handler(this._latestState)` synchronously when a state object already
+    // exists, else `this.latest().then(handler)`, a native round trip later (state.ts `add`).
+    // `deferSubscribe` stages that second branch, which is the one a launch takes: index.ts builds
+    // State lazily on the first addEventListener and its constructor's `_fetchCurrentState()` is
+    // async, so `_latestState` is still null at that first `add`. Repeats are not filtered on
+    // either branch — `_handleNativeStateUpdate` forwards every native event — hence `emit` with
+    // no equality check.
     if (url === NETINFO_STUB) {
       return {
         format: 'module',
@@ -48,13 +64,20 @@ registerHooks({
         source: `
           const handlers = new Set();
           let latest = {isConnected: true, isInternetReachable: true};
+          let pending = null;
           export function setLatest(s) { latest = s; }
           export function emitNet(s) { latest = s; for (const h of [...handlers]) h(s); }
           export function netHandlerCount() { return handlers.size; }
+          // Delivery is what is held, not subscription: the real async branch still adds the
+          // handler to the set first, and resolves with the state as of the round trip's return.
+          export function deferSubscribe() {
+            pending = [];
+            return () => { const held = pending; pending = null; for (const h of held) h(latest); };
+          }
           export default {
             addEventListener(handler) {
               handlers.add(handler);
-              handler(latest);
+              if (pending) pending.push(handler); else handler(latest);
               return () => handlers.delete(handler);
             },
           };
@@ -83,9 +106,23 @@ registerHooks({
         format: 'module',
         shortCircuit: true,
         source: `
-          const items = new Map();
+          export const items = new Map();
+          let gate = null;
+          // Holds the storage read open so a launch flush can be armed *inside* the rehydration
+          // window. Snapshot at call time then stall, as stores/outbox.test.js does: AsyncStorage
+          // runs on a serial queue, so a read issued first sees what a later write has not
+          // replaced. Only its resolution is delayed.
+          export function blockReads() {
+            let release;
+            gate = new Promise((r) => (release = r));
+            return () => { gate = null; release(); };
+          }
           export default {
-            getItem: async (k) => items.get(k) ?? null,
+            getItem: async (k) => {
+              const v = items.get(k) ?? null;
+              if (gate) await gate;
+              return v;
+            },
             setItem: async (k, v) => { items.set(k, v); },
             removeItem: async (k) => { items.delete(k); },
           };
@@ -131,8 +168,9 @@ registerHooks({
   },
 });
 
-const {emitNet, netHandlerCount, setLatest} = await import(NETINFO_STUB);
+const {deferSubscribe, emitNet, netHandlerCount, setLatest} = await import(NETINFO_STUB);
 const {appHandlerCount, emitAppState} = await import(RN_STUB);
+const storage = await import(ASYNC_STORAGE_STUB);
 const {calls, lists, resetCalls, setEntries, setListError, setOnList, setResponder} =
   await import(ENTRIES_STUB);
 const {ApiError} = await import('@/api/client');
@@ -140,6 +178,7 @@ const {useClockStore} = await import('@/stores/clock');
 const {useOutboxStore} = await import('@/stores/outbox');
 
 const AT = '2026-02-13T09:00:00Z';
+const KEY = 'clockit-outbox';
 
 // Enough turns for persist's rehydrate chain, a drain of three items and the reconcile behind it.
 // Real timers, so a hang fails an assertion instead of hanging the suite.
@@ -254,11 +293,8 @@ test('every arming flushes, not just the first one in the process', async () => 
 
 test('a transition to connected flushes; a repeat does not', async () => {
   // The plan says *transition* to true, and NetInfo forwards every native event without deduping,
-  // so a phone hopping cell towers repeats "connected" all day. The guard's other half — NetInfo
-  // handing a new subscriber the current state immediately — is no longer separately observable:
-  // startSync issues its flush synchronously *before* subscribing, so a subscribe event mistaken
-  // for a transition now joins that same `running` promise and costs nothing. sync.ts keeps the
-  // guard as belt and braces; this pins what can still be seen from outside.
+  // so a phone hopping cell towers repeats "connected" all day. This is the guard's `previous !==
+  // true` half; its `previous !== undefined` half is the test below.
   reset();
   const {startSync} = await freshSync();
   // Armed on an empty queue, so the flush that arming issues costs nothing and the clock-in below
@@ -279,6 +315,38 @@ test('a transition to connected flushes; a repeat does not', async () => {
     ['c-1'],
     'a real reconnect did not flush',
   );
+
+  stop();
+});
+
+test('the subscribe event is not a transition, even landing after the arming flush', async () => {
+  // The other half of the guard, staged on the branch a launch actually takes: NetInfo builds its
+  // State lazily on the first addEventListener and fetches the current state asynchronously, so
+  // the first arming in a process is handed `isConnected: true` a native round trip later — after
+  // startSync's own flush has settled, with no `running` left to join. A clock-in queued in that
+  // gap is then exposed to the subscribe event alone, and treating it as a transition sends it
+  // (and buys a full-history decrypt) on the strength of a connection that never changed.
+  reset([inItem('c-1')]);
+  const deliver = deferSubscribe();
+  const {startSync} = await freshSync();
+  const stop = startSync();
+  await settle();
+  assert.deepEqual(
+    calls.map((c) => c[1].client_id),
+    ['c-1'],
+    'the arming flush never drained the queue it was armed with',
+  );
+
+  outbox().enqueue(inItem('c-2'));
+  deliver();
+  await settle();
+
+  assert.deepEqual(
+    calls.map((c) => c[1].client_id),
+    ['c-1'],
+    'the subscribe event was treated as a transition to connected',
+  );
+  assert.equal(lists.length, 1, 'the subscribe event bought a second full-history decrypt');
 
   stop();
 });
@@ -515,6 +583,47 @@ test('a reconnect and a foreground in one tick cost one flush and one reconcile'
 
   assert.equal(sends(), 1, 'the same clock-in was sent twice');
   assert.equal(lists.length, 1, 'one reconnect bought two full-history decrypts');
+
+  stop();
+});
+
+test('a launch replay is reconciled, not measured against an unread queue', async () => {
+  // Relaunch owning a shift the last session could not send. The arming flush is issued before the
+  // storage read lands, so without `await hydrated` the depth either side of it is 0 -> 0 — an
+  // empty flush — and the reconcile that replay is owed is skipped. Nothing else covers it: the
+  // clock store is not persisted, so it has no optimistic entry to revert, and the clock tab's
+  // mount hydrate is not ordered after the replay and is not invalidated by it. The worker reads
+  // "Clocked out" on a shift the server has just accepted.
+  //
+  // The one test here that needs a *fresh* outbox: the window closes at module load, and the
+  // singleton's closed before the first test ran.
+  reset();
+  await settle(); // let reset's own persist write land before the stored queue is planted under it
+  storage.items.set(
+    KEY,
+    JSON.stringify({state: {items: [inItem('stored')], needsAttention: []}, version: 0}),
+  );
+  setEntries([entry('server-1', false)]);
+
+  const release = storage.blockReads();
+  outboxTag = 'launch';
+  const {startSync} = await freshSync();
+  outboxTag = '';
+
+  const stop = startSync();
+  await settle();
+  assert.equal(sends(), 0, 'the flush ran before the stored queue was readable');
+
+  release();
+  await settle();
+
+  assert.deepEqual(
+    calls.map((c) => c[1].client_id),
+    ['stored'],
+    'the stored shift was never replayed',
+  );
+  assert.equal(lists.length, 1, 'a launch replay was read as an empty flush and never reconciled');
+  assert.equal(clock().openEntry?.id, 'server-1', 'the replayed shift still reads "Clocked out"');
 
   stop();
 });
