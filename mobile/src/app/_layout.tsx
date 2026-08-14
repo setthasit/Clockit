@@ -11,6 +11,7 @@ import {
 import { Auth0Provider, useAuth0 } from "react-native-auth0";
 
 import { ApiError } from "@/api/client";
+import { startSync } from "@/lib/sync";
 import { theme } from "@/lib/theme";
 import { useClockStore } from "@/stores/clock";
 // Importing auth0Config also arms the api() auth handlers (stores/session.ts registers them at
@@ -141,6 +142,19 @@ function Gate() {
         inFlight.current = false;
       });
   }, [signedIn, me, attempt, loadMe, clearCredentials]);
+
+  // The outbox's flush triggers (lib/sync.ts). Here rather than on a screen because a queued
+  // shift must sync whichever tab is up, and behind `me` because the launch flush is specified as
+  // "after loadMe()" — before it there may be no usable session at all, and a flush with no token
+  // spends a 401 the queue then has to survive. The dep is a boolean, not `me`: the object's
+  // identity changes when 8.1 saves a name, and that must not tear the listeners down and rebuild
+  // them. The cleanup is the load-bearing half — a listener that outlives the session flushes a
+  // device-wide queue for whoever signs in next.
+  const syncing = signedIn && me != null;
+  useEffect(() => {
+    if (!syncing) return;
+    return startSync();
+  }, [syncing]);
 
   const spinner = (
     <View style={styles.screen}>
