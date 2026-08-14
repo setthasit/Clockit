@@ -572,14 +572,34 @@ test('a clock-out refused after a mid-flight hydrate reverts to the hydrated shi
   );
 });
 
-test('an accepted clock-out clears the shift', async () => {
+// The summary on the clocked-out card reads `lastClosed`, and nothing re-fetches on a successful
+// clock-out — so a close that only cleared `openEntry` would leave the *previous* shift on screen
+// until the next launch hydrate. The stale seed is what makes this non-vacuous.
+test('an accepted clock-out clears the shift and becomes the last shift', async () => {
   reset();
+  const stale = serverEntry({
+    id: 'srv-OLD',
+    status: 'closed',
+    clock_out: {at: AT, loc: BKK, accuracy: 5, mocked: false},
+  });
+  useClockStore.setState({lastClosed: stale});
   clock().setOpen(serverEntry({id: 'srv-3', client_id: 'in-3'}));
-  respond = async () => ok({entry: serverEntry({status: 'closed'})});
+  const closed = serverEntry({
+    id: 'srv-3',
+    client_id: 'in-3',
+    status: 'closed',
+    clock_out: {at: AT, loc: BKK, accuracy: 5, mocked: false},
+  });
+  respond = async () => ok({entry: closed});
 
   assert.deepEqual(await clockOutNow(MEMBERSHIPS), {done: true, message: null});
   assert.equal(clock().openEntry, null);
   assert.equal(clock().pendingSince, null);
+  assert.deepEqual(
+    clock().lastClosed,
+    closed,
+    'the card still shows the previous shift — the closed entry the server returned was discarded',
+  );
 });
 
 // ============================================================================================

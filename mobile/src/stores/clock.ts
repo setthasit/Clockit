@@ -43,14 +43,24 @@ type ClockState = {
   /** The running shift — server-confirmed, or optimistic while `pendingSince` is set. */
   openEntry: Entry | null;
   /** The most recently ended shift, for the clocked-out summary. Not tick state: a closed entry's
-   * two timestamps never move, so nothing re-renders on its account. Server-set only — hydrate
-   * writes it, the optimistic setters do not. */
+   * two timestamps never move, so nothing re-renders on its account. Never optimistic — hydrate
+   * and setClosed both write a server entry, setOpen/setPending do not touch it. */
   lastClosed: Entry | null;
   /** When the still-unacknowledged optimistic write was made (task 6.4), else null. Purely the
    * "waiting for connection" pill's flag (task 6.1) — it guards nothing. */
   pendingSince: string | null;
   /** The server has ruled: accepted (`e` = the returned entry) or rejected (revert). */
   setOpen(e: Entry | null): void;
+  /**
+   * The server accepted a clock-out and returned the entry it closed. Distinct from
+   * `setOpen(null)`, which says only "no longer on shift": the clocked-out card reads
+   * `lastClosed`, so without this the screen shows the *previous* shift until the next hydrate —
+   * i.e. until relaunch, since nothing else re-fetches on a successful clock-out.
+   *
+   * `e` is always the newest closed entry (its clock_out.at is the instant the server closed it),
+   * so this needs none of newestClosed's comparison.
+   */
+  setClosed(e: Entry): void;
   /** Optimistic, not yet accepted: a local entry for a clock-in, null for a clock-out. */
   setPending(e: Entry | null): void;
   /**
@@ -100,6 +110,10 @@ export const useClockStore = create<ClockState>((set) => ({
   setPending: (openEntry) => {
     writeGen++;
     set({openEntry, pendingSince: new Date().toISOString()});
+  },
+  setClosed: (lastClosed) => {
+    writeGen++;
+    set({openEntry: null, lastClosed, pendingSince: null});
   },
 
   reset: () => {

@@ -232,10 +232,10 @@ export default function Clock() {
           </>
         ) : (
           // ponytail: the summary comes from the launch hydrate, so a cold offline launch shows
-          // none — absent exactly when the worker cannot check the server themselves. Same for the
-          // moment after a clock-out until the next hydrate, since setOpen does not write
-          // lastClosed. Ceiling: no persisted copy. Upgrade path is task 7.1's history cache if it
-          // does not replace this line outright.
+          // none — absent exactly when the worker cannot check the server themselves. Ceiling: no
+          // persisted copy. Upgrade path is task 7.1's history cache if it does not replace this
+          // line outright. (A live clock-out is covered: clockFlow calls setClosed with the entry
+          // the server returned.)
           <>
             <Text style={styles.employer}>Clocked out</Text>
             {lastShift != null && (

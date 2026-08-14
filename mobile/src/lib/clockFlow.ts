@@ -338,8 +338,9 @@ export async function clockOutNow(memberships: Membership[]): Promise<ClockResul
 
   useClockStore.getState().setPending(null);
 
+  let closed: Entry;
   try {
-    await clockOut(body);
+    closed = await clockOut(body);
   } catch (e) {
     if (e instanceof ApiError && retryable(e.status)) {
       useOutboxStore.getState().enqueue({
@@ -360,7 +361,11 @@ export async function clockOutNow(memberships: Membership[]): Promise<ClockResul
     return {done: false, message: refused(e, employerName(memberships, open.employer_id))};
   }
 
-  useClockStore.getState().setOpen(null);
+  // setClosed, not setOpen(null): the clocked-out card reads `lastClosed`, so dropping the entry
+  // the server just returned would leave the *previous* shift on screen until the next hydrate.
+  // The offline path needs no equivalent — the outbox flush reconciles through
+  // hydrateFromServer() (lib/sync.ts), which writes both fields.
+  useClockStore.getState().setClosed(closed);
   onClockedOut();
   return OK;
 }
