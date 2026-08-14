@@ -1,5 +1,9 @@
 # Phase 3 — QA findings (task 10 verification run)
 
+> **All five fixed and verified 2026-08-14** — see "Resolution" at the end. Two of the fixes
+> proposed below turned out to be wrong when tried; the corrections are recorded there rather
+> than edited into the findings, so the reasoning that produced them stays readable.
+
 Automated run of `phase-3-mobile-app.md` task 10 against the local stack (`backend/make run` on `:8080`, mongo `clockit_local`, Metro `:8081`). iOS simulator `iPhone 17 Pro` (iOS 26.2) and Android emulator `Pixel_10_Pro` (API 37), both debug dev builds.
 
 Employer anchor for every geo case: seeded Acme Cafe at `49.2827,-123.1207`, `ANCHOR_RADIUS_M=1000`.
@@ -83,6 +87,52 @@ The employer sheet renders `7548.3 km, out of range`, and the same string reache
 **Fix**: fall back to a placeholder, or hide the row when the email is empty. Resolving bug 2 removes the common case but not the empty-value path.
 
 ---
+
+## Resolution (2026-08-14)
+
+Every bug reproduced from source before being fixed, and each fix was re-checked on the Android
+emulator (`Pixel_10_Pro`) and the iOS simulator (`iPhone 17 Pro`) against the same local stack.
+
+| # | Verdict | Landed in |
+|---|---|---|
+| 1 | Confirmed | `stores/clock.ts` gained `setClosed`; `clockFlow.ts` keeps the entry `clockOut` returns |
+| 2 | Confirmed — **backend half only**; the Auth0 Action stays a tenant prerequisite | `mongox/indexes.go` partial index, `user/store.go` empty-email guard |
+| 3 | Confirmed; the proposed fix does not work (below) | one `StatusBar` per background region, 5 files |
+| 4 | Confirmed | `lib/format.ts` |
+| 5 | Confirmed | `(tabs)/profile.tsx` — row hidden, not placeholdered |
+
+Both `clockOutNow` and `GetOrCreate` fixes are pinned by tests that were mutation-checked: reverting
+the source line fails them (`an accepted clock-out clears the shift and becomes the last shift`,
+`TestGetOrCreateAdmitsSeveralUsersWithoutAnEmail`).
+
+**Bug 2 — the proposed `partialFilterExpression` is rejected by MongoDB.** `$ne` is not in the
+accepted operator set (equality/`$eq`, `$exists: true`, `$gt/$gte/$lt/$lte`, `$type`, `$and/$or/$in`,
+`$geoWithin/$geoIntersects`), so `{email: {$type: "string", $ne: ""}}` fails at creation with
+`CannotCreateIndex … Expression not supported in partial index: $not` — confirmed against the
+compose Mongo 8. Shipped as `{email: {$gt: ""}}`. Also unmentioned in the finding: `EnsureIndexes`
+is idempotent only for *identical* specs, so an existing database fails startup with
+`IndexKeySpecsConflict` until `db.users.dropIndex("email_1")` runs once. No migration code — nothing
+is deployed.
+
+**Bug 3 — the proposed fix inverts on the screen it was meant to protect.** A root
+`<StatusBar style="dark" />` with a `light` override on sign-in gives the *blue* screen dark icons:
+RN's `StatusBar` applies the last-*mounted* entry of a props stack (`StatusBar.js:404-410`) and
+`componentDidMount` runs child-first, so the root instance is pushed after every screen's and wins.
+A build-time-only fix (the `expo-status-bar` config plugin, which writes `android:windowLightStatusBar`)
+fails differently — on unmount RN falls back to `_defaultProps.barStyle = 'default'`, which
+`WindowUtil.kt` maps to *clearing* `APPEARANCE_LIGHT_STATUS_BARS`, i.e. white icons again. What
+shipped is one `StatusBar` per background colour and none at the root: `dark` on `(tabs)/_layout.tsx`
+(inherited by `entry/[id]` and a pushed `permissions`, both verified) and `permissions.tsx` (the gate
+renders it before any navigator exists); `light` on `sign-in.tsx` and the two brand-blue gate screens
+in `_layout.tsx`. The theme file confirmed the cause: generated `AppTheme` sets `statusBarColor`
+transparent and no `windowLightStatusBar`, which defaults to false.
+
+**Not executed**: the sign-in screen's own status bar, because the tenant password for
+`android-tester@clockit.test` was not available and signing out is one-way here. The blue gate
+spinner — same colour, same `style="light"`, same "no tabs StatusBar mounted" state — was verified
+instead. On Android the transition cannot regress in any case: `light` and the `default` fallback
+both resolve to white icons there. On iOS `default` means dark content, so sign-in was *already*
+dark-on-#00286E before this change; the added `light` can only improve it.
 
 ## Environment note (not an app bug)
 
