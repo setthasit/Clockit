@@ -1,7 +1,6 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   RefreshControl,
   SectionList,
@@ -224,11 +223,7 @@ export default function History() {
       ListHeaderComponent={header}
       ListEmptyComponent={
         entries == null && error == null ? (
-          <ActivityIndicator
-            accessibilityLabel="Loading shifts"
-            color={theme.brand}
-            style={styles.loading}
-          />
+          <HistorySkeleton />
         ) : error != null ? (
           // The header already carries the message and the retry; a second "nothing here" under
           // it would read as "you have no shifts", which is a claim this screen cannot make.
@@ -251,6 +246,34 @@ export default function History() {
       }
       style={styles.screen}
     />
+  );
+}
+
+/**
+ * The first load, drawn as the shape of the answer rather than as a spinner: this list is a
+ * 30-day window the server decrypts per entry, so the wait is real, and a placeholder that
+ * matches the row layout keeps the screen from jumping when the rows land.
+ *
+ * One accessible element for the whole block, and static — a busy state is announced once, and
+ * a screen reader walking five identical stand-ins is worse than a spinner ever was. No
+ * animation either: RN has no shimmer primitive, and this app has no animation dependency
+ * (reanimated is present only as a transitive install), so the honest version is a still one.
+ */
+function HistorySkeleton() {
+  return (
+    <View
+      accessible
+      accessibilityLabel="Loading shifts"
+      accessibilityRole="progressbar"
+      style={styles.skeleton}
+    >
+      {[0, 1, 2, 3, 4].map((i) => (
+        <View key={i} style={styles.skeletonRow}>
+          <View style={[styles.skeletonBar, styles.skeletonTitle]} />
+          <View style={[styles.skeletonBar, styles.skeletonSub]} />
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -293,7 +316,18 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing.s,
     textTransform: "uppercase",
   },
-  loading: { padding: theme.spacing.l },
+  skeleton: { padding: theme.spacing.l, gap: theme.spacing.l },
+  skeletonRow: { gap: theme.spacing.s },
+  // Grey on white at 8% — visible as a placeholder, too faint to read as content. Not a theme
+  // token: nothing else in the app draws a placeholder, and one more colour in theme.ts would be
+  // a token with a single caller.
+  skeletonBar: {
+    height: 14,
+    borderRadius: theme.radius.m,
+    backgroundColor: "rgba(104,112,118,0.12)",
+  },
+  skeletonTitle: { width: "55%" },
+  skeletonSub: { width: "35%", height: 12 },
   empty: { alignItems: "center", gap: theme.spacing.s, padding: theme.spacing.l },
   emptyTitle: { color: theme.text, fontSize: 17, fontWeight: "600" },
   emptyHint: { color: theme.muted, fontSize: 14, textAlign: "center" },
