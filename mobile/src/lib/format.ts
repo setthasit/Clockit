@@ -14,9 +14,15 @@ export function formatDuration(minutes: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+// The tenth of a kilometre stops carrying information long before the number does: an employer
+// sheet listing a workplace in another city rendered "7548.3 km", and the same string reaches the
+// refusal copy. 100 km is where the decimal is under a tenth of a percent of the value. Below it
+// nothing moves — "620 m" and "2.4 km" are what the plan specifies.
 export function formatDistance(meters: number): string {
   const m = Math.max(0, Math.round(meters));
-  return m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`;
+  if (m < 1000) return `${m} m`;
+  const km = m / 1000;
+  return `${km < 100 ? km.toFixed(1) : Math.round(km)} km`;
 }
 
 // Local calendar day, not UTC: a 23:30 shift must group under the day the
