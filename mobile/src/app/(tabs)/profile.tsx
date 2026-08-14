@@ -204,13 +204,18 @@ export default function Profile() {
           </Text>
         )}
 
-        <View style={styles.field}>
-          <Text style={styles.fieldLabel}>Email</Text>
-          {/* Read-only: the email is the Auth0 identity the backend keys the account on, so it is
-              not this app's to change. No phone row at all — /v1/me returns `has_phone`, never the
-              number (api/me.ts), and there is no way to clear one in v1 either. */}
-          <Text style={styles.fieldValue}>{me.user.email}</Text>
-        </View>
+        {/* Hidden rather than shown empty: an identity can reach the backend with no email (the
+            claim comes from an Auth0 Action), and a labelled field with nothing under it reads as
+            a failure to load rather than as an account that has no address. */}
+        {me.user.email !== "" && (
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Email</Text>
+            {/* Read-only: the email is the Auth0 identity the backend keys the account on, so it
+                is not this app's to change. No phone row at all — /v1/me returns `has_phone`,
+                never the number (api/me.ts), and there is no way to clear one in v1 either. */}
+            <Text style={styles.fieldValue}>{me.user.email}</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.section}>
