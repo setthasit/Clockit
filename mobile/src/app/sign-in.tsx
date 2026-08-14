@@ -1,3 +1,4 @@
+import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -62,6 +63,10 @@ export default function SignIn() {
 
   return (
     <View style={styles.screen}>
+      {/* The one screen in the Stack on `theme.brand`, so it says so rather than relying on
+          Android's default — which is white icons only until some other screen's StatusBar has
+          set the appearance flag and unmounted again. */}
+      <StatusBar style="light" />
       {/* ponytail: a wordmark, because assets/ holds only Expo template art and shipping that as
           a logo would be worse than type. Swap in an <Image> when there is a real mark. */}
       <Text style={styles.wordmark}>ClockIt</Text>

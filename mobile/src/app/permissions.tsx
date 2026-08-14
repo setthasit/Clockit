@@ -1,5 +1,6 @@
 import * as Location from "expo-location";
 import { router } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import { SymbolView } from "expo-symbols";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -66,6 +67,10 @@ export default function Permissions() {
         },
       ]}
     >
+      {/* Its own, rather than inherited from (tabs)/_layout.tsx: on a first launch the gate
+          renders this screen directly, before any navigator exists, so nothing else is mounted
+          to keep Android's default white icons off this light background. */}
+      <StatusBar style="dark" />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
         {/* Decorative: SymbolView forwards no a11y props, and on Android it renders a bare <Text>
             glyph that TalkBack would otherwise stop on and read as a character. */}

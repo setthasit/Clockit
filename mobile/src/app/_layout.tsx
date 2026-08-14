@@ -1,5 +1,6 @@
 import * as Location from "expo-location";
 import { Stack } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -28,6 +29,7 @@ export default function RootLayout() {
   if (!auth0Config.domain || !auth0Config.clientId) {
     return (
       <View style={styles.screen}>
+        <StatusBar style="light" />
         <Text accessibilityRole="alert" style={styles.message}>
           This build is missing EXPO_PUBLIC_AUTH0_DOMAIN or
           EXPO_PUBLIC_AUTH0_CLIENT_ID and cannot sign in.
@@ -162,8 +164,14 @@ function Gate() {
     return startSync();
   }, [signedIn]);
 
+  // `styles.screen` is brand blue, so these two carry their own StatusBar. Deliberately here and
+  // not once around the whole component: RN applies the LAST-MOUNTED entry of a props stack and
+  // componentDidMount runs child-first, so a single instance wrapping the returns below would be
+  // pushed after every screen's and override all of them — including (tabs)', whose light
+  // backgrounds are the reason any of this exists.
   const spinner = (
     <View style={styles.screen}>
+      <StatusBar style="light" />
       <ActivityIndicator color={theme.surface} />
     </View>
   );
@@ -181,6 +189,7 @@ function Gate() {
   if (signedIn && !me) {
     return (
       <View style={styles.screen}>
+        <StatusBar style="light" />
         <Text accessibilityRole="alert" style={styles.message}>
           {meError}
         </Text>
