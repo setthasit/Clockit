@@ -35,8 +35,8 @@ Rules: no barrel files; components in `src/components` only when reused or >~80 
   - [x] 6.3: EmployerSheet
   - [x] 6.4: Clock-in/out flow + error mapping
 - [ ] Task 7: History & entry detail
-  - [ ] 7.1: History tab (grouped by day)
-  - [ ] 7.2: Entry detail + assign employer
+  - [x] 7.1: History tab (grouped by day)
+  - [x] 7.2: Entry detail + assign employer
 - [ ] Task 8: Profile tab
   - [ ] 8.1: Profile screen + sign out
 - [ ] Task 9: Outbox sync
