@@ -239,13 +239,15 @@ Flush on: NetInfo `isConnected` transition to true, AppState → `active`, succe
 
 ### Task 10: Verification (manual checklist)
 
-- [ ] 10.1: Fresh install → sign-in via Google and via username/password → lands on Clock.
-- [ ] 10.2: Zero-membership user: clock-in has **no popup**; personal entry appears; clock-out > 1 km away (simulator custom location) → `OUT_OF_RANGE` message.
-- [ ] 10.3: Seeded member (backend `make seed` with your email): sheet lists employer + distance; in-range clock-in succeeds; out-of-range shows server distance error.
-- [ ] 10.4: Android emulator with a mock-location app → clock-in blocked (local + server).
-- [ ] 10.5: Airplane mode clock-in → optimistic "waiting" state → disable airplane → auto-sync, entry visible in backend.
-- [ ] 10.6: Assign employer on a personal entry → badge reflects verification.
-- [ ] 10.7: Sign out clears everything; relaunch requires sign-in.
+Run results and the five defects it surfaced: [`phase-3-qa-findings.md`](./phase-3-qa-findings.md). Two of them (stale "last shift", Android status bar) are app bugs still open; one is a backend blocker that locks out every user after the first.
+
+- [x] 10.1: Fresh install → sign-in via Google and via username/password → lands on Clock. *(password half only — Google excluded by the operator)*
+- [x] 10.2: Zero-membership user: clock-in has **no popup**; personal entry appears; clock-out > 1 km away (simulator custom location) → `OUT_OF_RANGE` message.
+- [x] 10.3: Seeded member (backend `make seed` with your email): sheet lists employer + distance; in-range clock-in succeeds; out-of-range shows server distance error. *(membership attached by `user_id`, not email — see findings bug 2)*
+- [x] 10.4: Android emulator with a mock-location app → clock-in blocked (local + server). *(local blocked live via `cmd location` test providers; server half is unit-covered in `geo_test.go` — the local check short-circuits before any request, by design)*
+- [x] 10.5: Airplane mode clock-in → optimistic "waiting" state → disable airplane → auto-sync, entry visible in backend. *(Android exercises the NetInfo trigger, iOS the AppState one)*
+- [x] 10.6: Assign employer on a personal entry → badge reflects verification. *(both branches: verified and not-verified)*
+- [x] 10.7: Sign out clears everything; relaunch requires sign-in. *(Android live; iOS unit-covered by `signOut.test.js`)*
 - [x] 10.8: `npx tsc --noEmit` and `npx expo-doctor` clean; iOS + Android dev builds run.
 
 ### Phase completion notes (deviations from plan)
