@@ -45,8 +45,11 @@ func (s *Store) GetOrCreate(ctx context.Context, ident auth.Identity) (*User, er
 		return nil, err
 	}
 	// Invitations can arrive after the user exists, so this runs on every call,
-	// not only on creation.
-	if ident.EmailVerified {
+	// not only on creation. An empty email is skipped rather than matched on:
+	// AddMember stores a parsed address, so "" binds nothing today, and a filter
+	// that would claim every membership with a blank email is not worth leaving
+	// one careless write away from working.
+	if ident.EmailVerified && email != "" {
 		if err := s.claimInvitations(ctx, u.ID, email); err != nil {
 			return nil, err
 		}

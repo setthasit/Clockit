@@ -18,7 +18,15 @@ func indexes() map[string][]mongo.IndexModel {
 	return map[string][]mongo.IndexModel{
 		"users": {
 			{Keys: bson.D{{Key: "auth0_sub", Value: 1}}, Options: unique()},
-			{Keys: bson.D{{Key: "email", Value: 1}}, Options: unique()},
+			// Partial, because an identity can reach us with no email: the claim comes from an
+			// Auth0 Action (design §3) and a machine-to-machine token never runs one, so those
+			// users are stored with "". Under a plain unique index the first such document claims
+			// the value and every later one is rejected as EMAIL_TAKEN — an address they do not
+			// have — with no way past it. `$gt: ""` rather than `$ne: ""`: partialFilterExpression
+			// accepts only equality, $exists, $gt/$gte/$lt/$lte, $type, $and/$or/$in and the geo
+			// operators, so $ne is refused at creation time.
+			{Keys: bson.D{{Key: "email", Value: 1}}, Options: unique().
+				SetPartialFilterExpression(bson.D{{Key: "email", Value: bson.D{{Key: "$gt", Value: ""}}}})},
 		},
 		"employers": {
 			{Keys: bson.D{{Key: "owner_user_id", Value: 1}}},

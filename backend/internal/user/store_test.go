@@ -148,6 +148,36 @@ func TestGetOrCreateRejectsEmailOwnedByAnotherSubject(t *testing.T) {
 	}
 }
 
+// An identity can reach us with no email — a machine-to-machine token never runs
+// the Auth0 Action that supplies the claim. Under a plain unique index the first
+// such user claims "" and every later one is told the address is taken, which is
+// a permanent lockout for an address they do not have.
+func TestGetOrCreateAdmitsSeveralUsersWithoutAnEmail(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+
+	first, err := s.GetOrCreate(ctx, auth.Identity{Sub: "auth0|no-email-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.GetOrCreate(ctx, auth.Identity{Sub: "auth0|no-email-2"})
+	if err != nil {
+		t.Fatalf("second user without an email was locked out: %v", err)
+	}
+	if first.ID == second.ID {
+		t.Fatal("both subjects resolved to one user")
+	}
+
+	// The constraint must still hold for addresses that exist.
+	if _, err := s.GetOrCreate(ctx, auth.Identity{Sub: "auth0|x", Email: "taken@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.GetOrCreate(ctx, auth.Identity{Sub: "auth0|y", Email: "taken@example.com"})
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("err = %v, want ErrEmailTaken", err)
+	}
+}
+
 func TestGetOrCreateClaimsInvitations(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
