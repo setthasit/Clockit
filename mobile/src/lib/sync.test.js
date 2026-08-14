@@ -105,13 +105,25 @@ registerHooks({
           export const lists = [];
           let responder = async () => ({});
           let entries = [];
+          let listError = null;
+          let onList = () => {};
           export function setResponder(fn) { responder = fn; }
           export function setEntries(e) { entries = e; }
+          // The reconcile can fail on its own after a drain that succeeded — it is the app's
+          // heaviest route on a 15 s timeout, fired from a phone that has had signal for one
+          // second — and onList is what lets a live tap land *inside* that window.
+          export function setListError(e) { listError = e; }
+          export function setOnList(fn) { onList = fn; }
           export function resetCalls() { calls.length = 0; lists.length = 0; }
           export function clockIn(body) { calls.push(['clock-in', body]); return responder('clock-in', body); }
           export function clockOut(body) { calls.push(['clock-out', body]); return responder('clock-out', body); }
           export function postPings(pings) { calls.push(['pings', pings]); return responder('pings', pings); }
-          export async function listEntries() { lists.push(Date.now()); return entries; }
+          export async function listEntries() {
+            lists.push(Date.now());
+            onList();
+            if (listError) throw listError;
+            return entries;
+          }
         `,
       };
     }
@@ -121,7 +133,8 @@ registerHooks({
 
 const {emitNet, netHandlerCount, setLatest} = await import(NETINFO_STUB);
 const {appHandlerCount, emitAppState} = await import(RN_STUB);
-const {calls, lists, resetCalls, setEntries, setResponder} = await import(ENTRIES_STUB);
+const {calls, lists, resetCalls, setEntries, setListError, setOnList, setResponder} =
+  await import(ENTRIES_STUB);
 const {ApiError} = await import('@/api/client');
 const {useClockStore} = await import('@/stores/clock');
 const {useOutboxStore} = await import('@/stores/outbox');
@@ -196,6 +209,8 @@ function reset(items = []) {
   resetCalls();
   succeed();
   setEntries([]);
+  setListError(null);
+  setOnList(() => {});
   setLatest({isConnected: true, isInternetReachable: true});
   useOutboxStore.setState({items, needsAttention: []});
   clock().reset();
@@ -380,6 +395,73 @@ test('the pill clears once the last clock item is gone, and not one request befo
     'hydrateFromServer never touches pendingSince — the pill sticks for the life of the process',
   );
   assert.equal(clock().openEntry, null, 'the closed shift was left running');
+
+  stop();
+});
+
+test('a reconcile that failed does not clear the pill', async () => {
+  // The drain succeeds and then GET /v1/entries does not — the app's heaviest route (the whole
+  // history, ~2 decrypts per entry) on a 15 s timeout, fired from a phone that has had signal for
+  // one second. There is no server answer to clear the pill against, and on the drop path
+  // clock.ts keeps the optimistic entry, so clearing anyway reads "on shift, timer running,
+  // nothing pending" for a shift the server may have permanently refused.
+  reset([inItem('c-1')]);
+  clock().setPending(entry('', false));
+  setListError(new ApiError(0, 'NETWORK', 'offline'));
+
+  const {startSync} = await freshSync();
+  const stop = startSync();
+  await settle();
+
+  assert.deepEqual(outbox().items, [], 'the clock-in was not drained');
+  assert.equal(lists.length, 1);
+  assert.notEqual(
+    clock().pendingSince,
+    null,
+    'the pill was cleared in front of the server rather than against its answer',
+  );
+  assert.notEqual(clock().openEntry, null, 'a failed hydrate cleared the optimistic entry');
+
+  // The residual the ponytail note names: the queue is empty now, so the next trigger returns at
+  // the depth check and never reconciles — the pill stays up until the next clock action.
+  setListError(null);
+  emitAppState('active');
+  await settle();
+  assert.equal(lists.length, 1, 'an empty queue bought a full-history decrypt');
+  assert.notEqual(clock().pendingSince, null);
+
+  stop();
+});
+
+test('a clock action taken during the reconcile keeps its own pill', async () => {
+  // A clock-out tapped while the last queued clock-in drains. The hydrate can still return the
+  // shift as open (the close has not been sent yet), and clearing pendingSince then clears one
+  // belonging to a *newer* optimistic write: "on shift, nothing pending" with a clock-out owed —
+  // the exact lie the `after === 0` guard was built for, arriving concurrently instead.
+  reset([inItem('c-1')]);
+  clock().setPending(entry('', false));
+  // An older pill than any live tap can mint, which is also the real shape of this case: the flag
+  // was set when the queued shift was captured, minutes ago in a dead zone.
+  useClockStore.setState({pendingSince: AT});
+  setEntries([entry('server-1', false)]);
+  setOnList(() => clock().setPending(null));
+
+  const {startSync} = await freshSync();
+  const stop = startSync();
+  await settle();
+
+  assert.equal(lists.length, 1);
+  assert.notEqual(
+    clock().pendingSince,
+    null,
+    'the queued clock-in cleared a pill belonging to the clock-out tapped behind it',
+  );
+  assert.notEqual(clock().pendingSince, AT, 'the live tap never replaced the flag');
+  assert.equal(
+    clock().openEntry,
+    null,
+    "the server's pre-tap view put the worker back on shift mid-request",
+  );
 
   stop();
 });

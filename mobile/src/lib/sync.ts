@@ -33,7 +33,23 @@ const clockItems = (): number =>
 let running: Promise<void> | null = null;
 
 async function run(): Promise<void> {
+  // Read ahead of the outbox's rehydration gate (stores/outbox.ts: `await hydrated`, whose own
+  // comment warns that a drain running before it reports an empty queue as a successful flush), so
+  // a launch flush can compare against a queue that has not been read off disk yet and skip the
+  // reconcile. Deliberate, and safe only because of where it can happen: the launch flush is the
+  // only trigger that can precede rehydration, and at launch there is nothing to reconcile — the
+  // clock store is not persisted, so it is empty, and app/(tabs)/index.tsx hydrates on its own
+  // mount regardless. Awaiting the gate from here would mean exporting it, for a case with no
+  // symptom.
   const before = clockItems();
+
+  // Captured with it, for the same reason `after` is read again below: a live tap landing during
+  // the flush writes its own `pendingSince`, and the pill cleared at the end of this function
+  // would then be that tap's — a clock-out tapped while the last queued clock-in drains reads "on
+  // shift, nothing pending" with a close still owed, the exact lie the `after === 0` guard exists
+  // to prevent, arriving concurrently instead. Same shape as clock.ts's write ticket: capture,
+  // then act only if it is unchanged.
+  const pendingBefore = useClockStore.getState().pendingSince;
 
   // Swallowed, and the counts below are why it costs nothing to: flush() rejects only on a
   // non-ApiError escaping the request layer — a bug in our own code — and it leaves the item
@@ -51,22 +67,31 @@ async function run(): Promise<void> {
   // shape for every caller or a second, weaker contract beside the tested one. Depth before and
   // after says the same thing from outside, and says it for the drop case too — an item that was
   // refused permanently also leaves, and its optimistic entry is exactly what needs reverting.
+  // A live tap enqueuing while one item drains can net to `after === before` and skip the
+  // reconcile: harmless, because something is still queued, so the pill is honest and the next
+  // trigger flushes what is left.
   if (after >= before) return;
 
   // The authoritative reconcile for both outcomes: an accepted replay comes back as the open
   // entry, a dropped one as no entry. Rejection is expected, not exceptional — an offline hydrate
   // is a dead zone, and clock.ts never clears state on the way out, so the screen keeps what it
-  // had. Awaited so the pill below is cleared against the server's answer rather than in front
-  // of it.
+  // had. Awaited, and its outcome recorded, so the pill below is cleared against the server's
+  // answer rather than in front of it: a drain that succeeds followed by a GET /v1/entries that
+  // fails (the app's heaviest route, fired one second after signal returned) has no answer to
+  // clear it against, and on the drop path the optimistic entry is still standing.
   //
   // No signed-in guard, and the sign-out race is why it needs none: lib/signOut.ts clears the
   // credentials *before* it empties the queue, so a sync still in flight across a sign-out finds
   // no token and this request never leaves the device — and reset() has bumped the write
   // generation by then, so even a request that somehow answered could not put the previous
   // worker's shift back on screen. Two independent stops; a third would only cost an import.
+  let reconciled = false;
   await useClockStore
     .getState()
     .hydrateFromServer()
+    .then(() => {
+      reconciled = true;
+    })
     .catch(() => {});
 
   // The obligation stores/outbox.ts hands this file: hydrateFromServer() never touches
@@ -78,8 +103,20 @@ async function run(): Promise<void> {
   // clearing the flag when the clock-in alone was accepted would read "on shift, timer running,
   // nothing pending" while the close is still owed. Guarded on the flag being set because setOpen
   // bumps the write generation, which would void a hydrate someone else has in flight for nothing.
+  //
+  // ponytail: `reconciled` leaves a residual — a failed hydrate leaves the pill up until the next
+  // clock action, because a later trigger finds an empty queue, returns at the depth check above
+  // and never reaches this line. That is the honest residual (the connection did just fail, and
+  // the drop path's optimistic entry is still on screen) but it is a new ceiling: "waiting for
+  // connection" outlives the wait. Upgrade path is clock.ts's other option (a) — key the pill off
+  // outbox depth, which 7.1 already renders from, so it is a computed value with no flag to strand.
+  // Deliberately not closed by reconciling whenever `pendingSince != null && after === 0`: that
+  // fires inside a live tap's own optimistic window, and a setOpen(null) from a server view
+  // predating the tap would take the worker off shift mid-request.
   const clock = useClockStore.getState();
-  if (after === 0 && clock.pendingSince != null) clock.setOpen(clock.openEntry);
+  if (reconciled && after === 0 && pendingBefore != null && clock.pendingSince === pendingBefore) {
+    clock.setOpen(clock.openEntry);
+  }
 }
 
 function syncNow(): void {

@@ -143,18 +143,24 @@ function Gate() {
       });
   }, [signedIn, me, attempt, loadMe, clearCredentials]);
 
-  // The outbox's flush triggers (lib/sync.ts). Here rather than on a screen because a queued
-  // shift must sync whichever tab is up, and behind `me` because the launch flush is specified as
-  // "after loadMe()" — before it there may be no usable session at all, and a flush with no token
-  // spends a 401 the queue then has to survive. The dep is a boolean, not `me`: the object's
-  // identity changes when 8.1 saves a name, and that must not tear the listeners down and rebuild
-  // them. The cleanup is the load-bearing half — a listener that outlives the session flushes a
-  // device-wide queue for whoever signs in next.
-  const syncing = signedIn && me != null;
+  // The outbox's flush triggers (lib/sync.ts). Here rather than on a screen because a queued shift
+  // must sync whichever tab is up.
+  //
+  // Keyed on `signedIn`, NOT on `me`. `me` is a profile fetch, not a session check, and the two
+  // come apart in exactly the case these triggers exist for: an offline relaunch with a queued
+  // shift (the worker force-quits, or the OS evicts the app mid-shift in a dead zone) keeps
+  // `signedIn` true — hasValidCredentials() is a local keychain read — while loadMe() throws
+  // NETWORK and the gate lands on the Retry screen below with `me` null forever. Gating on `me`
+  // armed no listener there: signal returning did nothing, foregrounding did nothing, and the
+  // queue moved only if the worker happened to tap Retry, all while the server's MAX_QUEUED_AGE
+  // was running down. `signedIn` is the session, which is what the cleanup is protecting against
+  // outliving; a launch flush against a dead session costs one 401 the queue survives by design
+  // (stores/outbox.ts), and the gate's own loadMe 401 ends that session anyway. It also keeps a
+  // mid-session 401 from tearing the listeners down and re-arming them.
   useEffect(() => {
-    if (!syncing) return;
+    if (!signedIn) return;
     return startSync();
-  }, [syncing]);
+  }, [signedIn]);
 
   const spinner = (
     <View style={styles.screen}>
