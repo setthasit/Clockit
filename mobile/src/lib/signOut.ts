@@ -113,11 +113,10 @@ function wipeLocalState(): void {
  * owner); the alternative was refusing to sign out at all, which is worse. Upgrade path: remember
  * that the federated logout is owed and retry it on the next launch with a connection.
  *
- * ponytail: signing out mid-shift does not stop location tracking, because there is nothing to
- * stop yet — location/tracking.ts is phase 5's empty hook pair. `onClockedOut()` is deliberately
- * *not* called here: its contract is "the worker tapped", and a sign-out is not a clock-out, so
- * calling it would tell phase 5 the shift ended when the server still has it open. Phase 5 owes
- * this file a "stop tracking, the shift is unchanged" call of its own.
+ * Signing out mid-shift stops background tracking, and this file needs no call to do it:
+ * `wipeLocalState()` below clears the clock store, and location/tracking.ts subscribes to that
+ * store rather than to clock taps. The shift itself is untouched — the server still has it open,
+ * and it is still closable after the next sign-in.
  */
 export async function signOut(auth0: Auth0SignOut): Promise<SignOutResult> {
   try {

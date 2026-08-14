@@ -12,6 +12,10 @@ import {
 import { Auth0Provider, useAuth0 } from "react-native-auth0";
 
 import { ApiError } from "@/api/client";
+// Side-effect import, and load-bearing: it registers the background location task with
+// TaskManager and arms the clock-store subscription that starts and stops it. Nothing here uses
+// a value from it, so an "unused import" cleanup would silently disable on-shift pings.
+import "@/location/tracking";
 import { startSync } from "@/lib/sync";
 import { theme } from "@/lib/theme";
 import { useClockStore } from "@/stores/clock";

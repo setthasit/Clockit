@@ -15,6 +15,15 @@ const config: ExpoConfig = {
   },
   android: {
     package: "ai.duckos.clockit",
+    // Required by expo-task-manager, which neither it nor the expo-location plugin declares:
+    // TaskManagerUtils schedules the job that delivers a background location batch with
+    // setPersisted(true), and Android rejects a persisted job from an app without this
+    // permission — `IllegalArgumentException: Requested job cannot be persisted without holding
+    // android.permission.RECEIVE_BOOT_COMPLETED`, thrown on the main thread inside the delivery
+    // broadcast, i.e. a hard crash on the first on-shift ping rather than a dropped one. Verified
+    // on a Pixel 10 Pro emulator (API 37). expo-task-manager's own manifest already registers a
+    // receiver for BOOT_COMPLETED, so holding it is what the library expects, not an extra ask.
+    permissions: ["android.permission.RECEIVE_BOOT_COMPLETED"],
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",

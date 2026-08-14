@@ -14,7 +14,6 @@ import type {Membership} from '@/api/me';
 import type {Fix} from '@/api/types';
 import {formatDistance} from '@/lib/format';
 import {getFix, LocationError} from '@/location/fix';
-import {onClockedIn, onClockedOut} from '@/location/tracking';
 import {useClockStore} from '@/stores/clock';
 import {retryable, useOutboxStore} from '@/stores/outbox';
 
@@ -303,7 +302,8 @@ export async function clockInNow(
         .getState()
         .enqueue({kind: 'clock-in', clientId, body, queuedAt: now()});
       // The optimistic entry stands: the worker is on shift, the write is owed, not lost.
-      onClockedIn(local);
+      // Background tracking needs no call here — location/tracking.ts subscribes to the clock
+      // store, and setPending above is the write that says the worker is on shift.
       return OK;
     }
     useClockStore.getState().setOpen(null);
@@ -311,7 +311,6 @@ export async function clockInNow(
   }
 
   useClockStore.getState().setOpen(entry);
-  onClockedIn(entry);
   return OK;
 }
 
@@ -354,7 +353,6 @@ export async function clockOutNow(memberships: Membership[]): Promise<ClockResul
         body,
         queuedAt: now(),
       });
-      onClockedOut();
       return OK;
     }
     useClockStore.getState().setOpen(open);
@@ -366,6 +364,5 @@ export async function clockOutNow(memberships: Membership[]): Promise<ClockResul
   // The offline path needs no equivalent — the outbox flush reconciles through
   // hydrateFromServer() (lib/sync.ts), which writes both fields.
   useClockStore.getState().setClosed(closed);
-  onClockedOut();
   return OK;
 }
