@@ -120,9 +120,12 @@ export function flagNotes(flags: string[]): FlagNote[] {
 // exactly wrong here. `metres()` is likewise not borrowed: assign returns no distance details,
 // because it never rejects on distance.
 //
-// Only codes whose server text is not showable are listed; everything else falls through to
-// `message`, which for this API is user-facing English (client.ts's offline and session copy
-// included). Keep it that way — mapping NETWORK here would replace a good sentence with a worse one.
+// Only codes whose server text is not showable are listed. Everything else falls through to
+// `message`, which for the codes this route *chooses* to return is user-facing English (client.ts's
+// offline and session copy included) — but not for the ones it falls into: httpx.ErrorHandler
+// renders any non-AppError as the bare string "internal error" (httpx/errors.go:33). Keep the
+// fall-through for the former — mapping NETWORK here would replace a good sentence with a worse
+// one — and list the latter.
 const ASSIGN_COPY: Record<string, string> = {
   // Both INVALID_ARGUMENT causes on this route say the same thing to a worker: the entry is not in
   // the state this request assumed — already assigned, or not closed (handler.go:553-561). The UI
@@ -135,6 +138,11 @@ const ASSIGN_COPY: Record<string, string> = {
   // body (client.ts:119-122, 138) — so the fall-through's "The server returned a malformed
   // response." would be developer copy on top of a wrong implication.
   UNKNOWN: "Couldn't read the server's reply. Pull down to refresh and check whether it worked.",
+  // Same ambiguity, same answer. Assign is unusually exposed to a 500: h.anchor decrypts the
+  // employer's anchor, withinAnchor unwraps the DEK and opens *both* fixes, then the Mongo update,
+  // then h.respond decrypts again for the view (handler.go:561-579) — and store.Assign can have
+  // landed before the step that failed, so the shift may well be assigned.
+  INTERNAL: 'Something went wrong on the server. Pull down to refresh and check whether it worked.',
 };
 
 export function assignError(code: string, message: string, employerName: string): string {

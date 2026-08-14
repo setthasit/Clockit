@@ -1,7 +1,9 @@
 import { useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -30,6 +32,26 @@ const WINDOW_DAYS = 30;
 const DAY_MS = 86_400_000;
 
 const UNEXPECTED_ERROR = "Something went wrong. Pull down to refresh.";
+
+/**
+ * Speaks the assign outcome on iOS, where the live regions below cannot.
+ *
+ * `accessibilityLiveRegion` is Android-only (RN ViewAccessibility.d.ts:241), so without this the
+ * result of an irreversible action is silent on iOS — and the success branch unmounts the button
+ * the user was focused on, taking VoiceOver focus with it. The clock tab's connection pill rejected
+ * this (app/(tabs)/index.tsx) because it appears on its own and an effect would have to decide when
+ * *not* to repeat; here there is nothing to decide, the announcement is one tap's own result.
+ *
+ * Queued rather than immediate: an unqueued announcement raced against that same unmount is the one
+ * VoiceOver drops, and a dropped announcement is the bug this exists to fix. `queue` is iOS-only.
+ */
+function announce(message: string) {
+  if (Platform.OS === "ios") {
+    AccessibilityInfo.announceForAccessibilityWithOptions(message, {
+      queue: true,
+    });
+  }
+}
 
 /**
  * One shift, in full.
@@ -113,15 +135,21 @@ export default function EntryDetail() {
       setAssignFailed(null);
       try {
         const updated = await assignEmployer(id, m.employer.id);
+        // Retires any load already in flight, the same generation guard load() uses against itself.
+        // A pull-to-refresh started before this tap resolves *after* it — one full-window decrypt
+        // against one tiny PATCH — and would otherwise overwrite the assigned entry with its
+        // pre-assign snapshot, replacing a recorded `location_verified: false` with the vacuous
+        // personal badge on the one screen whose premise is that its claims are true.
+        loadGen.current++;
         setEntry(updated);
         setPicking(false);
         // The plan's "refetch → toast" collapses into this: PATCH answers with the assigned entry,
         // recomputed location_verified included (handler.go:572-579), so a refetch would spend a
         // second full-window decrypt to learn what the response already said. The History tab
         // reloads on its own focus effect, so going back is current too.
-        setAssigned(
-          `Assigned to ${m.employer.name}. ${locationBadge(updated, m.employer.name).detail}`,
-        );
+        const message = `Assigned to ${m.employer.name}. ${locationBadge(updated, m.employer.name).detail}`;
+        setAssigned(message);
+        announce(message);
       } catch (e) {
         // Deliberately not queued to the outbox. Its item kinds are clock-in | clock-out | pings —
         // a persisted, tested schema — and assign does not belong in them: PATCH /v1/entries/:id
@@ -131,11 +159,12 @@ export default function EntryDetail() {
         // retry a 400, so that item would surface as "could not be synced" for an action that in
         // fact succeeded. Nothing is lost by asking instead: the hours are already on record and
         // assignment has no deadline, unlike a clock-in, which is what the outbox exists for.
-        setAssignFailed(
+        const message =
           e instanceof ApiError
             ? assignError(e.code, e.message, m.employer.name)
-            : UNEXPECTED_ERROR,
-        );
+            : UNEXPECTED_ERROR;
+        setAssignFailed(message);
+        announce(message);
       } finally {
         setAssigning(false);
       }
@@ -180,10 +209,14 @@ export default function EntryDetail() {
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
           {/* An explicit retry: with nothing else on screen there is no scroll view tall enough
-              to suggest it can be pulled. */}
+              to suggest it can be pulled. onRefresh rather than load(), so the retry borrows the
+              RefreshControl's spinner — a bare load() leaves `loaded` true and shows nothing at
+              all. `disabled` is what actually stops the repeat taps: the spinner is only feedback,
+              and each tap is another 30-day server-side decrypt. */}
           <Pressable
             accessibilityRole="button"
-            onPress={() => void load()}
+            disabled={refreshing}
+            onPress={onRefresh}
             style={({ pressed }) => [styles.action, pressed && styles.pressed]}
           >
             <Text style={styles.actionLabel}>Try again</Text>

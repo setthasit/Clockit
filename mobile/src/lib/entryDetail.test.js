@@ -116,6 +116,18 @@ test('assign refusals are rewritten only where the server copy is unshowable', (
   );
 });
 
+test('a 500 is neither shown raw nor reported as a failure', () => {
+  // httpx.ErrorHandler renders every non-AppError as this exact string (httpx/errors.go:33), and
+  // assign is unusually exposed to one — two DEK unwraps, both fixes decrypted, the update, then
+  // the view re-encrypted. Both halves matter: "internal error" is not a sentence for a worker,
+  // and store.Assign can have landed before the step that failed, so the copy must not claim the
+  // shift is still personal either.
+  const message = assignError('INTERNAL', 'internal error', 'Acme');
+
+  assert.doesNotMatch(message, /internal error/);
+  assert.match(message, /refresh and check whether it worked/);
+});
+
 test('findEntry falls back to an open entry outside the fetched window', () => {
   const open = entry({id: 'old', closed: false});
 
