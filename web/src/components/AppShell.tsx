@@ -1,5 +1,6 @@
 import type {AnchorHTMLAttributes} from 'react';
 import {Link, Outlet, useLocation} from 'react-router';
+import {useDocumentTitle} from '../lib/title';
 import {useAuth0} from '@auth0/auth0-react';
 import {AppShell} from '@astryxdesign/core/AppShell';
 import {Avatar} from '@astryxdesign/core/Avatar';
@@ -31,6 +32,11 @@ export function Shell() {
   const {user, logout} = useAuth0();
   const {employers, setEmployerId} = useEmployer();
   const employer = useActiveEmployer();
+
+  // Read off the nav rather than from a second map: a route named one thing in the sidebar and
+  // another in the tab is a bug waiting to be introduced by whoever renames one of them. An
+  // unknown path (the catch-all redirect, mid-navigation) falls back to the bare app name.
+  useDocumentTitle(NAV_ITEMS.find((item) => item.href === pathname)?.label ?? null);
 
   return (
     // Astryx's own AppShell only carries a TODO where the root providers will go, so it

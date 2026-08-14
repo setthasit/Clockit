@@ -11,6 +11,7 @@ import {TextInput} from '@astryxdesign/core/TextInput';
 import {MapAnchorPicker, type AnchorValue} from '../components/MapAnchorPicker';
 import {api, ApiError} from '../lib/api';
 import {useEmployer} from '../lib/employer';
+import {useDocumentTitle} from '../lib/title';
 import {timezoneOptions} from '../lib/timezones';
 import type {Employer} from '../lib/types';
 
@@ -22,6 +23,7 @@ const NO_ANCHOR: AnchorValue = {lat: null, lng: null};
 export function OnboardingRoute() {
   const navigate = useNavigate();
   const {employers, addEmployer} = useEmployer();
+  useDocumentTitle('New employer');
 
   const [name, setName] = useState('');
   const [timezone, setTimezone] = useState(BROWSER_TIMEZONE);

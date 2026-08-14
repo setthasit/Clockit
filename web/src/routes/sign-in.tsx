@@ -6,9 +6,12 @@ import {Center} from '@astryxdesign/core/Center';
 import {VStack} from '@astryxdesign/core/Layout';
 import {Spinner} from '@astryxdesign/core/Spinner';
 import {Heading, Text} from '@astryxdesign/core/Text';
+import {useDocumentTitle} from '../lib/title';
 
 export function SignInRoute() {
   const {isLoading, isAuthenticated, error, loginWithRedirect} = useAuth0();
+  // Before the early returns below: hooks run in the same order on every render.
+  useDocumentTitle('Sign in');
 
   // The guard puts the path the user asked for in location state; main.tsx's
   // onRedirectCallback navigates to appState.returnTo once Auth0 comes back.
