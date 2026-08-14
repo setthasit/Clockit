@@ -123,8 +123,12 @@ let inFlight: Promise<void> | null = null;
 // Resolved from onRehydrateStorage below. persist's own onFinishHydration is not usable here: it
 // is skipped entirely when the storage read rejects (zustand middleware.mjs — the catch path only
 // calls postRehydrationCallback), so awaiting it would park the queue forever on a corrupt store.
+//
+// Exported for lib/sync.ts, which measures queue depth either side of a flush and would otherwise
+// read 0 before *and* after a launch replay, skipping the reconcile that replay is owed. Same gate,
+// awaited twice, not a second one.
 let markHydrated = () => {};
-const hydrated = new Promise<void>((resolve) => {
+export const hydrated = new Promise<void>((resolve) => {
   markHydrated = resolve;
 });
 

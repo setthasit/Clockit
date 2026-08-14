@@ -2,7 +2,7 @@ import NetInfo from '@react-native-community/netinfo';
 import {AppState} from 'react-native';
 
 import {useClockStore} from '@/stores/clock';
-import {useOutboxStore} from '@/stores/outbox';
+import {hydrated, useOutboxStore} from '@/stores/outbox';
 
 /**
  * When the outbox drains, and what has to happen afterwards.
@@ -33,14 +33,16 @@ const clockItems = (): number =>
 let running: Promise<void> | null = null;
 
 async function run(): Promise<void> {
-  // Read ahead of the outbox's rehydration gate (stores/outbox.ts: `await hydrated`, whose own
-  // comment warns that a drain running before it reports an empty queue as a successful flush), so
-  // a launch flush can compare against a queue that has not been read off disk yet and skip the
-  // reconcile. Deliberate, and safe only because of where it can happen: the launch flush is the
-  // only trigger that can precede rehydration, and at launch there is nothing to reconcile — the
-  // clock store is not persisted, so it is empty, and app/(tabs)/index.tsx hydrates on its own
-  // mount regardless. Awaiting the gate from here would mean exporting it, for a case with no
-  // symptom.
+  // The same gate flush() waits on (stores/outbox.ts), awaited here too because the depth
+  // comparison below is only meaningful against a queue that has been read off disk. At launch an
+  // unrehydrated store reports 0 before *and* after a replay that really happened, so `after >=
+  // before` skips the reconcile — and nothing else covers it: the clock store has no optimistic
+  // entry to revert at launch, but it still owes the *server's* post-replay answer, and
+  // app/(tabs)/index.tsx's mount hydrate is not ordered after the replay and bumps no write
+  // generation, so its pre-replay answer stands. A relaunch with a queued clock-in then reads
+  // "Clocked out" until the next tap 409s its way through clockFlow.ts's HYDRATE_CODES.
+  await hydrated;
+
   const before = clockItems();
 
   // Captured with it, for the same reason `after` is read again below: a live tap landing during
@@ -125,32 +127,38 @@ function syncNow(): void {
   }));
 }
 
-// Once per process, not once per start. The launch flush is "successful launch after loadMe()"
-// (plan §9.1), and the gate's `me` is what says loadMe() succeeded — but `me` is also cleared
-// mid-session by onUnauthorized(), and the gate answers that by loading it again. Tying a flush
-// to every arrival of `me` would therefore close a loop through a 401: flush 401s -> me cleared ->
-// me reloaded -> flush 401s, forever, against an endpoint that is refusing us. The queue survives
-// a 401 by design (stores/outbox.ts), so the next AppState or NetInfo trigger replays it anyway;
-// this only stops the session's own recovery from being one of them. Never reset: a second
-// sign-in inside one process starts from an empty queue (clearForSignOut) and the clock tab
-// hydrates on its own mount, so there is nothing for a second launch flush to do.
-let launchFlushed = false;
-
 /**
- * Arms the triggers. Call while signed in, and call the returned function when that stops being
- * true: a NetInfo or AppState listener that outlives a sign-out flushes a device-wide queue
- * against whoever signs in next (stores/outbox.ts is not user-scoped).
+ * Arms the triggers and flushes once, on every arming. Call while signed in, and call the returned
+ * function when that stops being true: a NetInfo or AppState listener that outlives a sign-out
+ * flushes a device-wide queue against whoever signs in next (stores/outbox.ts is not user-scoped).
+ *
+ * The flush is per *arming*, not per process, because a second arming inside one process is a real
+ * session that can own real queued hours: an unrecoverable 401 ends a session while deliberately
+ * *keeping* the queue (app/_layout.tsx clears credentials and the clock store only; a 401 is
+ * retryable, stores/outbox.ts), so the worker signing back in arrives owning unsent shifts with
+ * nothing else to move them — NetInfo's subscribe-time event is swallowed below as a non-transition
+ * and AppState only emits on a real change, so their hours would sit until some incidental event
+ * while the server's MAX_QUEUED_AGE ran down. Repeated and concurrent calls (a StrictMode double
+ * mount) cost one flush: they collapse on the `running` join above.
+ *
+ * ponytail: tearing the listeners down is not the same as scoping the queue, and the difference is
+ * the ceiling lib/signOut.ts hands this file by name. Worker A is 401'd out, the queue survives by
+ * design, worker B signs in on the same phone, `signedIn` goes true, and the first trigger here
+ * replays A's clock-in under B's Auth0 token: someone else's hours, silently, undoable only by an
+ * employer edit. The hazard predates these triggers (stores/outbox.ts's docblock argues it in full)
+ * but this is what fires it. Upgrade path is that file's per-sub scoping — `persist.setOptions({name:
+ * `clockit-outbox-${sub}`})` plus `.rehydrate()` on every sign-in, with its `hydrated` gate made
+ * re-armable — and it cannot be closed from here: a guard on this side would only park the queue.
  */
 export function startSync(): () => void {
-  if (!launchFlushed) {
-    launchFlushed = true;
-    syncNow();
-  }
+  syncNow();
 
-  // undefined until the first event, which is a third state and a load-bearing one: NetInfo
-  // delivers the current state to a new subscriber immediately (State.add -> handler(latest)),
-  // so a listener that treated "is true" as "became true" would fire a second sync alongside the
-  // launch one above — two full-history decrypts for one launch. The plan says *transition*.
+  // undefined until the first event, and that third state is what stops "is true" reading as
+  // "became true": NetInfo delivers the current state to a new subscriber immediately (State.add ->
+  // handler(latest)), so without it every arming would issue two syncs. Today the second would
+  // collapse on the `running` join — the flush above is issued synchronously, in this same tick —
+  // so this is belt and braces rather than the only defence. It stays because that collapse is an
+  // accident of ordering, and because the plan says *transition* either way.
   //
   // `isConnected`, not `isInternetReachable`, which is deliberately weaker: reachability is a HEAD
   // to clients3.google.com, so it is null while in flight, stays false behind any captive portal

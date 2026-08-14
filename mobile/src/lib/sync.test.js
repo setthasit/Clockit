@@ -218,11 +218,13 @@ function reset(items = []) {
 
 const sends = () => calls.length;
 
-test('the launch flush drains the queue once per process, not once per session', async () => {
-  // "Successful launch after loadMe()", and the *once* is the loop guard: `me` is cleared by
-  // onUnauthorized and reloaded by the gate, so a flush tied to every arrival of `me` closes a
-  // loop through a 401 — flush 401s, me is cleared, me is reloaded, flush 401s — against an
-  // endpoint that is already refusing us. AppState and NetInfo still replay the queue.
+test('every arming flushes, not just the first one in the process', async () => {
+  // "Successful launch after loadMe()" — and a second arming inside one process is a second real
+  // session, because a 401 ends one while deliberately *keeping* the queue (app/_layout.tsx clears
+  // credentials and the clock store only; 401 is retryable, stores/outbox.ts). So the worker who
+  // signs back in owns unsent hours, and nothing else here would move them: the subscribe event is
+  // swallowed as a non-transition and AppState only emits on a real change. They would sit until
+  // some incidental event while the server's MAX_QUEUED_AGE ran down.
   reset([inItem('c-1')]);
 
   const {startSync} = await freshSync();
@@ -241,26 +243,30 @@ test('the launch flush drains the queue once per process, not once per session',
   const stopAgain = startSync();
   await settle();
 
-  assert.equal(sends(), 1, 're-arming the triggers flushed again — a 401 would loop here');
+  assert.deepEqual(
+    calls.map((c) => c[1].client_id),
+    ['c-1', 'c-2'],
+    'a re-arm left the queue the 401 exit preserved sitting unsent',
+  );
+  assert.deepEqual(outbox().items, []);
   stopAgain();
 });
 
-test('a transition to connected flushes; the subscribe event and a repeat do not', async () => {
-  // The plan says *transition* to true, and both halves are real: NetInfo hands a new subscriber
-  // the current state immediately, and it forwards every native event without deduping, so a
-  // phone hopping cell towers repeats "connected" all day.
+test('a transition to connected flushes; a repeat does not', async () => {
+  // The plan says *transition* to true, and NetInfo forwards every native event without deduping,
+  // so a phone hopping cell towers repeats "connected" all day. The guard's other half — NetInfo
+  // handing a new subscriber the current state immediately — is no longer separately observable:
+  // startSync issues its flush synchronously *before* subscribing, so a subscribe event mistaken
+  // for a transition now joins that same `running` promise and costs nothing. sync.ts keeps the
+  // guard as belt and braces; this pins what can still be seen from outside.
   reset();
   const {startSync} = await freshSync();
-  // The launch flush is spent on an empty queue first, so what the queued clock-in below is
-  // exposed to is the *subscribe* event alone.
-  startSync()();
+  // Armed on an empty queue, so the flush that arming issues costs nothing and the clock-in below
+  // is exposed to the events alone.
+  const stop = startSync();
   await settle();
 
   outbox().enqueue(inItem('c-1'));
-  const stop = startSync();
-  await settle();
-  assert.equal(sends(), 0, 'the subscribe event was treated as a transition to connected');
-
   emitNet({isConnected: true, isInternetReachable: true});
   await settle();
   assert.equal(sends(), 0, 'a repeat "still connected" event flushed');
