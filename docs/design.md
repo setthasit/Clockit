@@ -112,6 +112,7 @@ Employer (must own `{id}`):
 | DELETE     | `/v1/employers/{id}/members/{mid}`   | Remove (soft: status `removed`)                                |
 | GET        | `/v1/employers/{id}/entries?from&to` | Calendar + table data                                          |
 | PUT        | `/v1/employers/{id}/tips/{date}`     | `{amount_cents}`, `date` = `YYYY-MM-DD` in employer tz; upsert |
+| GET        | `/v1/employers/{id}/tips?from&to`    | Tip pool per day — lets the table render tip inputs in one round trip |
 | GET        | `/v1/employers/{id}/report?from&to`  | Per employee per day: hours, rate, base pay, tip share, total  |
 
 Idempotency: every mobile mutation carries a client-generated UUID (`client_id`); a unique index dedupes retries from the offline outbox.
