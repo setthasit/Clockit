@@ -18,7 +18,7 @@ import (
 
 const (
 	testDomain   = "test.auth0.local"
-	testAudience = "https://api.clockit.duckos.ai"
+	testAudience = "https://api.clockit.setthasit.dev"
 )
 
 func testConfig() config.Config {

@@ -105,7 +105,7 @@ jobs:
       - run: npm ci
       - run: npm run build
         env:
-          VITE_API_URL: https://api.clockit.duckos.ai
+          VITE_API_URL: https://api.clockit.setthasit.dev
           VITE_AUTH0_DOMAIN: ${{ vars.PROD_AUTH0_DOMAIN }}
           VITE_AUTH0_CLIENT_ID: ${{ vars.PROD_AUTH0_CLIENT_ID }}
           VITE_AUTH0_AUDIENCE: ${{ vars.PROD_AUTH0_AUDIENCE }}

@@ -13,14 +13,14 @@ Each stack has its own state (`gs://clockit-tofu-state/stacks/<name>`) and reads
 
 ## Before anything (human, once)
 
-GCP project + billing · Atlas org + API key · Cloudflare zone `duckos.ai` + DNS-edit token · Tailscale tailnet + OAuth client · Auth0 prod tenant · Expo/EAS account.
+GCP project + billing · Atlas org + API key · Cloudflare zone `setthasit.dev` + DNS-edit token · Tailscale tailnet + OAuth client · Auth0 prod tenant · Expo/EAS account.
 
 `*.tfvars` is gitignored, so stack inputs travel as `TF_VAR_*` — exported locally, and set as GitHub repo **variables** for CI (none of them is a secret; secrets live in Secret Manager):
 
 ```sh
 export TF_VAR_project_id=<gcp-project-id>          # every stack
 export TF_VAR_github_repo=setthasit/Clockit        # 00-bootstrap
-export TF_VAR_cloudflare_zone_id=<zone-id>         # 10-foundation (Cloudflare → duckos.ai → Overview)
+export TF_VAR_cloudflare_zone_id=<zone-id>         # 10-foundation (Cloudflare → setthasit.dev → Overview)
 export TF_VAR_atlas_org_id=<org-id>                # 30-data (Atlas → Organization Settings)
 export TF_VAR_auth0_beta_domain=<tenant>.us.auth0.com   # 40-platform
 export TF_VAR_auth0_prod_domain=<tenant>.us.auth0.com   # 40-platform
@@ -64,7 +64,7 @@ gcloud compute network-endpoint-groups list --filter="name=clockit-api-prod"
 
 ## Decisions taken while implementing
 
-- **API behind a standalone NEG, not a GKE Gateway** (plan task 6.2 fallback). A Gateway provisions its own load balancer, which cannot also serve a GCS backend bucket — two LBs, two IPs, two certs. The NEG lets one URL map host both `clockit.duckos.ai` and `api.clockit.duckos.ai`, which is what design §7.1 and the cost table assume. Price: the apply-order note above.
+- **API behind a standalone NEG, not a GKE Gateway** (plan task 6.2 fallback). A Gateway provisions its own load balancer, which cannot also serve a GCS backend bucket — two LBs, two IPs, two certs. The NEG lets one URL map host both `clockit.setthasit.dev` and `api.clockit.setthasit.dev`, which is what design §7.1 and the cost table assume. Price: the apply-order note above.
 - **SPA fallback lives on the URL map**, not the backend bucket: `google_compute_backend_bucket` has no error-policy field in google 7.x. `path_matcher.default_custom_error_response_policy` maps 404 → `/index.html` with response code 200. GA provider, no `google-beta` needed.
 - **Atlas PSC is port-mapped**: one address + one forwarding rule (the deprecated legacy architecture needed 50).
 - **Two Atlas secrets** (`atlas-public-key`, `atlas-private-key`) instead of one `atlas-api-key` — the provider takes both halves separately.
@@ -86,7 +86,7 @@ Run after the first full apply — none of it can be checked before the cloud ex
 2. From a tailnet device: `curl https://clockit-api-beta.<tailnet>.ts.net/healthz` → 200; beta web loads; beta Grafana (`clockit-grafana-beta`) shows traces. Off tailnet: unreachable.
 3. Atlas → Network Access has no public entries; `mongosh` works from a pod, fails from a laptop.
 4. `gcloud --impersonate-service-account=api-beta@… kms decrypt --key=kek-prod …` → permission denied.
-5. `https://clockit.duckos.ai` loads; `https://clockit.duckos.ai/table` on refresh → 200; `https://api.clockit.duckos.ai/healthz` → 200; certs valid.
+5. `https://clockit.setthasit.dev` loads; `https://clockit.setthasit.dev/table` on refresh → 200; `https://api.clockit.setthasit.dev/healthz` → 200; certs valid.
 6. Phase 3 + 5 manual checklists on real devices against beta.
 7. Tag `v0.1.0` → prod pipeline green → smoke: sign-in, clock in/out, calendar, tips.
 8. After 48 h, billing report ≈ design §7.5 (~$170/mo), no surprise SKUs.

@@ -21,7 +21,7 @@
         "EXPO_PUBLIC_API_URL": "https://clockit-api-beta.REPLACE-ME-TAILNET.ts.net",
         "EXPO_PUBLIC_AUTH0_DOMAIN": "REPLACE-ME-auth0-beta-tenant.us.auth0.com",
         "EXPO_PUBLIC_AUTH0_CLIENT_ID": "REPLACE-ME-auth0-beta-client-id",
-        "EXPO_PUBLIC_AUTH0_AUDIENCE": "https://api.clockit.duckos.ai"
+        "EXPO_PUBLIC_AUTH0_AUDIENCE": "https://api.clockit.setthasit.dev"
       }
     },
     "production": {
@@ -29,10 +29,10 @@
       "channel": "production",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://api.clockit.duckos.ai",
+        "EXPO_PUBLIC_API_URL": "https://api.clockit.setthasit.dev",
         "EXPO_PUBLIC_AUTH0_DOMAIN": "REPLACE-ME-auth0-prod-tenant.us.auth0.com",
         "EXPO_PUBLIC_AUTH0_CLIENT_ID": "REPLACE-ME-auth0-prod-client-id",
-        "EXPO_PUBLIC_AUTH0_AUDIENCE": "https://api.clockit.duckos.ai"
+        "EXPO_PUBLIC_AUTH0_AUDIENCE": "https://api.clockit.setthasit.dev"
       }
     }
   },

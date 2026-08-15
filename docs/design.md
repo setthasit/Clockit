@@ -47,7 +47,7 @@ Per tenant:
 
 - **Connections**: `google-oauth2`, `apple`, `facebook`, `Username-Password-Authentication`. Require verified email (social providers give it; database connection enforces email verification before membership linking).
 - **Applications**: `mobile` (Native) and `web` (SPA).
-- **API**: `clockit-api`, audience `https://api.clockit.duckos.ai`, RS256.
+- **API**: `clockit-api`, audience `https://api.clockit.setthasit.dev`, RS256.
 - **Action**: add `email` + `email_verified` custom claims to the access token so the backend never calls `/userinfo`.
 
 Clients use Universal Login (browser-based) — zero credential handling in our code, all four connections for free:
@@ -356,7 +356,7 @@ Single GCP project, region **`us-central1`** (users on both coasts — Vancouver
 | Ingress prod | One global external ALB: `api.…` → GKE (Gateway API) , `app.…` → backend bucket + CDN, custom-error-response for SPA                                                   | prod only                                                                |
 | Ingress beta | **Tailscale Kubernetes operator**: beta `api` Service + beta web nginx exposed as tailnet devices (MagicDNS). No public IP touches beta                                | beta only                                                                |
 | Egress       | Cloud NAT (private nodes need it for Auth0 JWKS, Tailscale control plane)                                                                                              | Shared                                                                   |
-| DNS/TLS      | **Cloudflare DNS** (zone `duckos.ai`; records managed by tofu via the cloudflare provider). Hosts: `clockit.duckos.ai` (web), `api.clockit.duckos.ai` (API), **DNS-only (grey-cloud)** pointing at the GCP LB. Certs: Certificate Manager with **DNS authorization** (one CNAME in Cloudflare) so issuance never depends on proxy status | prod hostnames only                                                      |
+| DNS/TLS      | **Cloudflare DNS** (zone `setthasit.dev`; records managed by tofu via the cloudflare provider). Hosts: `clockit.setthasit.dev` (web), `api.clockit.setthasit.dev` (API), **DNS-only (grey-cloud)** pointing at the GCP LB. Certs: Certificate Manager with **DNS authorization** (one CNAME in Cloudflare) so issuance never depends on proxy status | prod hostnames only                                                      |
 
 ### 7.2 OpenTofu — layered stacks, isolated state
 
@@ -476,7 +476,7 @@ Local-first: infra is deliberately last so no cloud cost accrues while the produ
 
 ## 11. Decisions log (from design review)
 
-1. **Domain**: `duckos.ai`, DNS on **Cloudflare** — hosts `clockit.duckos.ai` (web) and `api.clockit.duckos.ai` (API), grey-cloud records to the GCP LB, certs via Certificate Manager DNS authorization.
+1. **Domain**: `setthasit.dev`, DNS on **Cloudflare** — hosts `clockit.setthasit.dev` (web) and `api.clockit.setthasit.dev` (API), grey-cloud records to the GCP LB, certs via Certificate Manager DNS authorization.
 2. **Region**: users on both coasts (Vancouver/NYC) → `us-central1` for GCP + Atlas (regions must match for PSC).
 3. **Anchor map picker**: Google Maps JS API — we're on GCP anyway, easy setup, most reliable; free tier covers this traffic. Key restricted by referrer + API.
 4. **Money visibility**: employees see nothing money-related in v1 (rates *and* tip shares stay employer-only). Employee earnings view is a possible later feature pending feedback — the data model already supports it.

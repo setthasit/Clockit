@@ -15,11 +15,11 @@ const config: ExpoConfig = {
   // theme.ts is a single light palette, so dark native chrome would clash.
   userInterfaceStyle: "light",
   ios: {
-    bundleIdentifier: "ai.duckos.clockit",
+    bundleIdentifier: "dev.setthasit.clockit",
     icon: "./assets/expo.icon",
   },
   android: {
-    package: "ai.duckos.clockit",
+    package: "dev.setthasit.clockit",
     // Required by expo-task-manager, which neither it nor the expo-location plugin declares:
     // TaskManagerUtils schedules the job that delivers a background location batch with
     // setPersisted(true), and Android rejects a persisted job from an app without this

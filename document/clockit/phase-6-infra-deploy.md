@@ -2,13 +2,13 @@
 
 ## Context
 
-Design: `docs/design.md` §7 (all), §6.3 (web hosting), §3 (Auth0 prod tenant), §11 (decisions: Cloudflare DNS on `duckos.ai`, `us-central1`, OTel backend shortlist).
+Design: `docs/design.md` §7 (all), §6.3 (web hosting), §3 (Auth0 prod tenant), §11 (decisions: Cloudflare DNS on `setthasit.dev`, `us-central1`, OTel backend shortlist).
 
-Deliverable: OpenTofu stacks `00 → 50`, k8s manifests, CI/CD, beta live on the tailnet, prod live at `clockit.duckos.ai` / `api.clockit.duckos.ai`, mobile builds via EAS channels.
+Deliverable: OpenTofu stacks `00 → 50`, k8s manifests, CI/CD, beta live on the tailnet, prod live at `clockit.setthasit.dev` / `api.clockit.setthasit.dev`, mobile builds via EAS channels.
 
 **Dependencies**: Phases 2–5 (deployable images/bundles). This phase starts the cloud bill (~$170/mo, design §7.5).
 
-**Manual prerequisites** (human, before agent work): GCP project + billing; Atlas org + API key; Cloudflare zone `duckos.ai` + API token (DNS edit); Tailscale tailnet + OAuth client for the operator; Auth0 prod tenant (mirror of beta config with prod URLs); Expo/EAS account. Secrets go into GCP Secret Manager in task 1.3 — never into tfvars committed to git.
+**Manual prerequisites** (human, before agent work): GCP project + billing; Atlas org + API key; Cloudflare zone `setthasit.dev` + API token (DNS edit); Tailscale tailnet + OAuth client for the operator; Auth0 prod tenant (mirror of beta config with prod URLs); Expo/EAS account. Secrets go into GCP Secret Manager in task 1.3 — never into tfvars committed to git.
 
 Provider schema rule: resource names below are the intended shape — **verify current attribute schemas in the provider registries** (`google`, `mongodbatlas`, `cloudflare`, `kubernetes`, `helm`) before writing; do not guess deprecated fields. Pin provider versions in each stack.
 
@@ -73,7 +73,7 @@ Module `kms`: `google_kms_key_ring` `clockit`, two `google_kms_crypto_key` (`kek
 
 #### 2.3 Registry, Maps key, Cloudflare
 
-`google_artifact_registry_repository` (docker, `us-central1`). Import the hand-made Maps key: `import` block for `google_apikeys_key` + restrictions (HTTP referrers `clockit.duckos.ai`, Maps JS API only). Cloudflare provider (token from Secret Manager via `data.google_secret_manager_secret_version`): records created in task 6 output wiring — define the zone data source here, export zone id.
+`google_artifact_registry_repository` (docker, `us-central1`). Import the hand-made Maps key: `import` block for `google_apikeys_key` + restrictions (HTTP referrers `clockit.setthasit.dev`, Maps JS API only). Cloudflare provider (token from Secret Manager via `data.google_secret_manager_secret_version`): records created in task 6 output wiring — define the zone data source here, export zone id.
 
 ### Task 3: 20-cluster
 
@@ -112,7 +112,7 @@ Per env (`for_each` over `{beta, prod}`): `kubernetes_namespace`; `kubernetes_se
 #### 6.2 ALB + certs + API gateway
 
 - `google_certificate_manager_dns_authorization` for both hosts + `google_certificate_manager_certificate` — output the required CNAMEs → `cloudflare_record`s (**DNS-only/grey-cloud**, design §7.1).
-- One global external ALB: `google_compute_url_map` host rules — `clockit.duckos.ai` → backend bucket; `api.clockit.duckos.ai` → API backend. API backend via GKE **Gateway API**: `gke-l7-global-external-managed` Gateway + HTTPRoute in prod overlay (task 7) — if wiring the standalone URL map to the Gateway-created resources fights the provider, fall back to a `Standalone NEG` (`cloud.google.com/neg` Service annotation) + `google_compute_backend_service` referenced by the same URL map; record which path was taken.
+- One global external ALB: `google_compute_url_map` host rules — `clockit.setthasit.dev` → backend bucket; `api.clockit.setthasit.dev` → API backend. API backend via GKE **Gateway API**: `gke-l7-global-external-managed` Gateway + HTTPRoute in prod overlay (task 7) — if wiring the standalone URL map to the Gateway-created resources fights the provider, fall back to a `Standalone NEG` (`cloud.google.com/neg` Service annotation) + `google_compute_backend_service` referenced by the same URL map; record which path was taken.
 - `cloudflare_record` A records for both hosts → ALB IP (`google_compute_global_address`).
 
 ### Task 7: k8s manifests
@@ -141,7 +141,7 @@ Prod overlay: namespace prod, replicas 2, Gateway + HTTPRoute (or NEG annotation
 - [ ] 10.2: Beta: `curl https://clockit-api-beta.<tailnet>.ts.net/healthz` from a tailnet device → 200; beta web loads; beta Grafana shows traces. Off-tailnet: unreachable.
 - [ ] 10.3: Atlas: no public access-list entries; connection only via PSC (verify from a pod: `mongosh` connects; from laptop w/o tailnet: fails).
 - [ ] 10.4: KMS isolation: beta KSA cannot decrypt with `kek-prod` (negative test via `gcloud --impersonate-service-account`).
-- [ ] 10.5: Prod: `https://clockit.duckos.ai` loads; deep link `/table` refresh → 200 (SPA policy works); `https://api.clockit.duckos.ai/healthz` → 200; certs valid.
+- [ ] 10.5: Prod: `https://clockit.setthasit.dev` loads; deep link `/table` refresh → 200 (SPA policy works); `https://api.clockit.setthasit.dev/healthz` → 200; certs valid.
 - [ ] 10.6: End-to-end on real devices against beta: full phase-3/5 manual checklists pass over tailnet.
 - [ ] 10.7: Tag `v0.1.0` → prod deploy pipeline green; smoke: sign-in, clock-in/out, calendar, tips.
 - [ ] 10.8: Cost sanity after 48 h: billing report ≈ design §7.5 expectations; no surprise SKUs.

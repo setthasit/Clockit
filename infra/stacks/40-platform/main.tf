@@ -35,7 +35,7 @@ variable "auth0_beta_domain" { type = string }
 variable "auth0_prod_domain" { type = string }
 variable "auth0_audience" {
   type    = string
-  default = "https://api.clockit.duckos.ai"
+  default = "https://api.clockit.setthasit.dev"
 }
 
 provider "google" {

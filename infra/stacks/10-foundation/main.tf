@@ -23,12 +23,12 @@ variable "region" {
   default = "us-central1"
 }
 variable "cloudflare_zone_id" {
-  description = "Zone id of duckos.ai, read off the Cloudflare dashboard. Not a secret; the API token is."
+  description = "Zone id of setthasit.dev, read off the Cloudflare dashboard. Not a secret; the API token is."
   type        = string
 }
 variable "maps_referrers" {
   type    = list(string)
-  default = ["https://clockit.duckos.ai/*"]
+  default = ["https://clockit.setthasit.dev/*"]
 }
 
 module "network" {

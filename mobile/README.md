@@ -18,7 +18,7 @@ npm start
 |---|---|---|---|
 | `development` | internal, dev client | — | whatever `.env` says |
 | `beta` | internal | `beta` | `https://clockit-api-beta.<tailnet>.ts.net` |
-| `production` | store | `production` | `https://api.clockit.duckos.ai` |
+| `production` | store | `production` | `https://api.clockit.setthasit.dev` |
 
 ```sh
 eas init                                  # one-time: creates the EAS project

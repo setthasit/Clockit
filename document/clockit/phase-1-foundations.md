@@ -6,7 +6,7 @@ Design: `docs/design.md` §2 (repo layout), §3 (auth), §4.1 (backend structure
 
 Deliverable: a running Go API skeleton (`/healthz` only) with fx wiring, config, Mongo/Valkey clients, full OTel pipeline visible in local Grafana, envelope crypto with `local` + `kms` key wrappers, and Auth0 JWT middleware — plus the docker-compose local stack. No business endpoints yet (phase 2).
 
-**Dependencies**: none. **Manual prerequisite** (human, not agent): an Auth0 tenant with a `clockit-api` API (audience `https://api.clockit.duckos.ai`, RS256) and the `email`/`email_verified` custom-claims Action per design §3. The agent only needs `AUTH0_DOMAIN` + `AUTH0_AUDIENCE` env values; tests use a generated RSA key, not Auth0.
+**Dependencies**: none. **Manual prerequisite** (human, not agent): an Auth0 tenant with a `clockit-api` API (audience `https://api.clockit.setthasit.dev`, RS256) and the `email`/`email_verified` custom-claims Action per design §3. The agent only needs `AUTH0_DOMAIN` + `AUTH0_AUDIENCE` env values; tests use a generated RSA key, not Auth0.
 
 ## Tasks
 
@@ -73,7 +73,7 @@ MONGO_URI=mongodb://localhost:27017
 MONGO_DB=clockit_local
 VALKEY_ADDR=localhost:6379
 AUTH0_DOMAIN=your-tenant.us.auth0.com
-AUTH0_AUDIENCE=https://api.clockit.duckos.ai
+AUTH0_AUDIENCE=https://api.clockit.setthasit.dev
 KEK_MODE=local                # local | kms
 KEK_LOCAL_KEY=                # base64 32 bytes; generate: openssl rand -base64 32
 KMS_KEY_NAME=                 # projects/.../cryptoKeys/kek-beta (kms mode only)

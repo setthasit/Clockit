@@ -27,11 +27,11 @@ variable "state_bucket" {
 }
 variable "web_host" {
   type    = string
-  default = "clockit.duckos.ai"
+  default = "clockit.setthasit.dev"
 }
 variable "api_host" {
   type    = string
-  default = "api.clockit.duckos.ai"
+  default = "api.clockit.setthasit.dev"
 }
 variable "web_bucket_name" {
   type    = string
