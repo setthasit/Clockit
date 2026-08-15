@@ -4,6 +4,11 @@ const config: ExpoConfig = {
   name: "ClockIt",
   slug: "clockit",
   version: "1.0.0",
+  // EAS Update keys off this, and `appVersionSource: "remote"` in eas.json rules out the
+  // "nativeVersion" policy. The EAS project does not exist yet — after `eas init` +
+  // `eas update:configure`, add `extra: { eas: { projectId: "<uuid>" } }` and
+  // `updates: { url: "https://u.expo.dev/<uuid>" }` here (EAS CLI cannot write a TS config).
+  runtimeVersion: { policy: "appVersion" },
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: "clockit",
