@@ -1,0 +1,230 @@
+variable "project_id" { type = string }
+variable "region" { type = string }
+variable "name" {
+  type    = string
+  default = "clockit"
+}
+variable "web_host" { type = string }
+variable "api_host" { type = string }
+variable "web_bucket_name" { type = string }
+variable "cloudflare_zone_id" { type = string }
+variable "api_neg_name" {
+  description = "Standalone NEG name from the prod Service annotation."
+  type        = string
+  default     = "clockit-api-prod"
+}
+variable "api_neg_zones" {
+  description = <<-EOT
+    Zones where GKE actually created the standalone NEG. Discovered after the prod
+    overlay is applied: `gcloud compute network-endpoint-groups list`. Apply this
+    stack only once those NEGs exist.
+  EOT
+  type        = list(string)
+  default     = ["us-central1-a", "us-central1-b", "us-central1-c"]
+}
+
+# --- Web origin: bucket + CDN ------------------------------------------------
+
+resource "google_storage_bucket" "web" {
+  project                     = var.project_id
+  name                        = var.web_bucket_name
+  location                    = upper(var.region)
+  uniform_bucket_level_access = true
+  force_destroy               = false
+}
+
+resource "google_storage_bucket_iam_member" "public_read" {
+  bucket = google_storage_bucket.web.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+resource "google_compute_backend_bucket" "web" {
+  project     = var.project_id
+  name        = "${var.name}-web"
+  bucket_name = google_storage_bucket.web.name
+  enable_cdn  = true
+
+  cdn_policy {
+    cache_mode        = "CACHE_ALL_STATIC"
+    client_ttl        = 3600
+    default_ttl       = 3600
+    max_ttl           = 86400
+    negative_caching  = true
+    serve_while_stale = 86400
+  }
+}
+
+# --- API origin: standalone NEGs from the prod Service ------------------------
+
+data "google_compute_network_endpoint_group" "api" {
+  for_each = toset(var.api_neg_zones)
+  project  = var.project_id
+  name     = var.api_neg_name
+  zone     = each.value
+}
+
+resource "google_compute_health_check" "api" {
+  project = var.project_id
+  name    = "${var.name}-api"
+
+  http_health_check {
+    request_path       = "/healthz"
+    port_specification = "USE_SERVING_PORT"
+  }
+}
+
+resource "google_compute_backend_service" "api" {
+  project               = var.project_id
+  name                  = "${var.name}-api"
+  protocol              = "HTTP"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+  timeout_sec           = 30
+  health_checks         = [google_compute_health_check.api.id]
+
+  dynamic "backend" {
+    for_each = data.google_compute_network_endpoint_group.api
+    content {
+      group                 = backend.value.id
+      balancing_mode        = "RATE"
+      max_rate_per_endpoint = 100
+    }
+  }
+
+  log_config {
+    enable      = true
+    sample_rate = 0.1
+  }
+}
+
+# --- Single ALB: one IP, one cert, both hosts --------------------------------
+
+resource "google_compute_global_address" "lb" {
+  project = var.project_id
+  name    = "${var.name}-lb"
+}
+
+resource "google_compute_url_map" "this" {
+  project         = var.project_id
+  name            = var.name
+  default_service = google_compute_backend_bucket.web.id
+
+  host_rule {
+    hosts        = [var.web_host]
+    path_matcher = "web"
+  }
+
+  host_rule {
+    hosts        = [var.api_host]
+    path_matcher = "api"
+  }
+
+  # SPA deep links: a refresh on /table asks the bucket for an object that does
+  # not exist; serve index.html under a 200 so the router takes over.
+  path_matcher {
+    name            = "web"
+    default_service = google_compute_backend_bucket.web.id
+
+    default_custom_error_response_policy {
+      error_service = google_compute_backend_bucket.web.id
+      error_response_rule {
+        match_response_codes   = ["404"]
+        path                   = "/index.html"
+        override_response_code = 200
+      }
+    }
+  }
+
+  path_matcher {
+    name            = "api"
+    default_service = google_compute_backend_service.api.id
+  }
+}
+
+# --- Certificates: DNS authorization, so issuance ignores proxy status --------
+
+resource "google_certificate_manager_dns_authorization" "this" {
+  for_each = toset([var.web_host, var.api_host])
+  project  = var.project_id
+  name     = "${var.name}-${replace(each.value, ".", "-")}"
+  location = "global"
+  domain   = each.value
+}
+
+resource "cloudflare_dns_record" "dns_auth" {
+  for_each = google_certificate_manager_dns_authorization.this
+  zone_id  = var.cloudflare_zone_id
+  name     = each.value.dns_resource_record[0].name
+  type     = each.value.dns_resource_record[0].type
+  content  = each.value.dns_resource_record[0].data
+  ttl      = 300
+  proxied  = false
+}
+
+resource "google_certificate_manager_certificate" "this" {
+  project  = var.project_id
+  name     = var.name
+  location = "global"
+
+  managed {
+    domains            = [var.web_host, var.api_host]
+    dns_authorizations = [for a in google_certificate_manager_dns_authorization.this : a.id]
+  }
+}
+
+resource "google_compute_target_https_proxy" "this" {
+  project                          = var.project_id
+  name                             = var.name
+  url_map                          = google_compute_url_map.this.id
+  certificate_manager_certificates = [google_certificate_manager_certificate.this.id]
+}
+
+resource "google_compute_global_forwarding_rule" "https" {
+  project               = var.project_id
+  name                  = "${var.name}-https"
+  target                = google_compute_target_https_proxy.this.id
+  ip_address            = google_compute_global_address.lb.id
+  port_range            = "443"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+}
+
+# Grey-cloud DNS means nothing else redirects plain http:// for us.
+resource "google_compute_url_map" "redirect" {
+  project = var.project_id
+  name    = "${var.name}-redirect"
+
+  default_url_redirect {
+    https_redirect         = true
+    redirect_response_code = "MOVED_PERMANENTLY_DEFAULT"
+    strip_query            = false
+  }
+}
+
+resource "google_compute_target_http_proxy" "redirect" {
+  project = var.project_id
+  name    = "${var.name}-redirect"
+  url_map = google_compute_url_map.redirect.id
+}
+
+resource "google_compute_global_forwarding_rule" "http" {
+  project               = var.project_id
+  name                  = "${var.name}-http"
+  target                = google_compute_target_http_proxy.redirect.id
+  ip_address            = google_compute_global_address.lb.id
+  port_range            = "80"
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+}
+
+resource "cloudflare_dns_record" "host" {
+  for_each = toset([var.web_host, var.api_host])
+  zone_id  = var.cloudflare_zone_id
+  name     = each.value
+  type     = "A"
+  content  = google_compute_global_address.lb.address
+  ttl      = 300
+  proxied  = false # grey-cloud: TLS terminates at the GCP LB
+}
+
+output "lb_ip" { value = google_compute_global_address.lb.address }
+output "web_bucket" { value = google_storage_bucket.web.name }
+output "url_map_name" { value = google_compute_url_map.this.name }
