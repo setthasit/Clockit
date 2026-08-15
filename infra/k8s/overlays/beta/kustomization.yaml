@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: beta
+resources:
+  - ../../base
+  - web.yaml
+replicas:
+  - name: api
+    count: 1
+patches:
+  - target:
+      kind: Service
+      name: api
+    patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: api
+        annotations:
+          tailscale.com/expose: "true"
+          tailscale.com/hostname: clockit-api-beta
