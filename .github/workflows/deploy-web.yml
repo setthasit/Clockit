@@ -1,0 +1,126 @@
+# Repo variables:  vars.GCP_PROJECT_ID, vars.GCP_WIF_PROVIDER, vars.GCP_SERVICE_ACCOUNT,
+#                  vars.GKE_CLUSTER, vars.TAILNET_NAME, vars.PROD_URL_MAP,
+#                  vars.BETA_AUTH0_DOMAIN, vars.BETA_AUTH0_CLIENT_ID, vars.BETA_AUTH0_AUDIENCE,
+#                  vars.PROD_AUTH0_DOMAIN, vars.PROD_AUTH0_CLIENT_ID, vars.PROD_AUTH0_AUDIENCE
+# Repo secrets:    secrets.BETA_GOOGLE_MAPS_KEY, secrets.PROD_GOOGLE_MAPS_KEY
+# Environments:    prod (approval gate on the tag release)
+#
+# Beta is an nginx image on the tailnet; prod is a static bundle in GCS behind the CDN.
+name: deploy-web
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+
+env:
+  REGISTRY: us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/clockit
+  API_PLACEHOLDER: us-central1-docker.pkg.dev/PROJECT_ID/clockit/api
+  WEB_PLACEHOLDER: us-central1-docker.pkg.dev/PROJECT_ID/clockit/web
+
+jobs:
+  # `paths:` on a push trigger would also filter tag pushes, so the path filter lives here.
+  changes:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'web/**'
+
+  beta:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: gke-gcloud-auth-plugin
+
+      - name: build and push web image
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker build -t "$REGISTRY/web:$GITHUB_SHA" web \
+            --build-arg VITE_API_URL="https://clockit-api-beta.${{ vars.TAILNET_NAME }}.ts.net" \
+            --build-arg VITE_AUTH0_DOMAIN="${{ vars.BETA_AUTH0_DOMAIN }}" \
+            --build-arg VITE_AUTH0_CLIENT_ID="${{ vars.BETA_AUTH0_CLIENT_ID }}" \
+            --build-arg VITE_AUTH0_AUDIENCE="${{ vars.BETA_AUTH0_AUDIENCE }}" \
+            --build-arg VITE_GOOGLE_MAPS_KEY="${{ secrets.BETA_GOOGLE_MAPS_KEY }}"
+          docker push "$REGISTRY/web:$GITHUB_SHA"
+
+      - run: gcloud container clusters get-credentials "${{ vars.GKE_CLUSTER }}" --region us-central1
+
+      - name: apply beta overlay
+        shell: bash
+        run: |
+          cd infra/k8s/overlays/beta
+          # The overlay also carries the api Deployment, so its image needs a real project
+          # too. Keep whatever sha api last deployed instead of moving it.
+          # ponytail: on a first-ever beta bring-up api has no live image and lands on
+          # :latest until deploy-backend runs; drop this once web leaves the api overlay.
+          API=$(kubectl -n beta get deploy api -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+          kustomize edit set image "$WEB_PLACEHOLDER=$REGISTRY/web:$GITHUB_SHA"
+          kustomize edit set image "$API_PLACEHOLDER=${API:-$REGISTRY/api:latest}"
+          kubectl apply -k .
+          kubectl -n beta rollout status deployment/web --timeout=5m
+
+  prod:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: prod
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_API_URL: https://api.clockit.duckos.ai
+          VITE_AUTH0_DOMAIN: ${{ vars.PROD_AUTH0_DOMAIN }}
+          VITE_AUTH0_CLIENT_ID: ${{ vars.PROD_AUTH0_CLIENT_ID }}
+          VITE_AUTH0_AUDIENCE: ${{ vars.PROD_AUTH0_AUDIENCE }}
+          VITE_GOOGLE_MAPS_KEY: ${{ secrets.PROD_GOOGLE_MAPS_KEY }}
+
+      # Hashed assets first (excluded index.html is also safe from the delete pass), then
+      # index.html last so it never points at bundles that are not uploaded yet.
+      - name: sync bundle to GCS
+        run: |
+          gcloud storage rsync dist gs://clockit-web-prod \
+            --recursive \
+            --delete-unmatched-destination-objects \
+            --exclude='index\.html$' \
+            --cache-control='public,max-age=31536000,immutable'
+          gcloud storage cp dist/index.html gs://clockit-web-prod/index.html \
+            --cache-control='no-cache'
+
+      - run: gcloud compute url-maps invalidate-cdn-cache "${{ vars.PROD_URL_MAP }}" --path=/index.html --global

@@ -1,0 +1,103 @@
+# Repo variables:  vars.GCP_PROJECT_ID, vars.GCP_WIF_PROVIDER, vars.GCP_SERVICE_ACCOUNT,
+#                  vars.CLOUDFLARE_ZONE_ID, vars.ATLAS_ORG_ID,
+#                  vars.BETA_AUTH0_DOMAIN, vars.PROD_AUTH0_DOMAIN
+# Repo secrets:    none
+# Environments:    infra (approval gate on apply)
+name: infra
+
+on:
+  pull_request:
+    paths: ['infra/**']
+  push:
+    branches: [main]
+    paths: ['infra/**']
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+# *.tfvars is gitignored, so every stack input arrives as TF_VAR_*.
+env:
+  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+  TF_VAR_github_repo: ${{ github.repository }}
+  TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+  TF_VAR_atlas_org_id: ${{ vars.ATLAS_ORG_ID }}
+  TF_VAR_auth0_beta_domain: ${{ vars.BETA_AUTH0_DOMAIN }}
+  TF_VAR_auth0_prod_domain: ${{ vars.PROD_AUTH0_DOMAIN }}
+
+jobs:
+  plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_wrapper: false
+      - run: tofu fmt -check -recursive infra
+
+      # HEAD is the PR merge commit, so HEAD^ is the base branch tip.
+      - name: plan changed stacks
+        shell: bash
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD -- infra/ | grep -v '^infra/k8s/' || true)
+          [ -n "$CHANGED" ] || { echo "no tofu changes"; exit 0; }
+          # A module or other shared file changed: every stack is potentially affected.
+          if echo "$CHANGED" | grep -qv '^infra/stacks/'; then ALL=1; fi
+          for d in infra/stacks/*/; do
+            if [ -z "$ALL" ] && ! echo "$CHANGED" | grep -q "^$d"; then continue; fi
+            echo "::group::$d"
+            tofu -chdir="$d" init -input=false -no-color
+            { echo "<details><summary><code>$d</code></summary>"; echo; echo '```'; } >> plan.md
+            tofu -chdir="$d" plan -input=false -no-color | tee -a plan.md
+            { echo '```'; echo '</details>'; } >> plan.md
+            echo "::endgroup::"
+          done
+
+      - name: comment plan on PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -s plan.md ] || exit 0
+          head -c 60000 plan.md > body.md
+          gh pr comment "${{ github.event.number }}" --body-file body.md
+
+  apply:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: infra
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_wrapper: false
+
+      - name: apply changed stacks
+        shell: bash
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD -- infra/ | grep -v '^infra/k8s/' || true)
+          [ -n "$CHANGED" ] || { echo "no tofu changes"; exit 0; }
+          if echo "$CHANGED" | grep -qv '^infra/stacks/'; then ALL=1; fi
+          for d in infra/stacks/*/; do
+            if [ -z "$ALL" ] && ! echo "$CHANGED" | grep -q "^$d"; then continue; fi
+            echo "::group::$d"
+            tofu -chdir="$d" init -input=false -no-color
+            tofu -chdir="$d" apply -auto-approve -input=false -no-color
+            echo "::endgroup::"
+          done
