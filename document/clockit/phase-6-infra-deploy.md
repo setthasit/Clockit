@@ -14,34 +14,34 @@ Provider schema rule: resource names below are the intended shape — **verify c
 
 ## Tasks
 
-- [ ] Task 1: `00-bootstrap`
-  - [ ] 1.1: State bucket + API enablement (local state, then migrate)
-  - [ ] 1.2: GitHub WIF pool + CI service account
-  - [ ] 1.3: Secret Manager entries
-- [ ] Task 2: `10-foundation`
-  - [ ] 2.1: VPC, subnet, Cloud NAT
-  - [ ] 2.2: KMS keyring + `kek-beta`/`kek-prod`
-  - [ ] 2.3: Artifact Registry, Maps key adoption, Cloudflare records scaffold
-- [ ] Task 3: `20-cluster`
-  - [ ] 3.1: GKE Autopilot (private nodes, Workload Identity)
-- [ ] Task 4: `30-data`
-  - [ ] 4.1: Atlas project + M10 + PSC endpoint
-  - [ ] 4.2: DB users + connection secrets
-- [ ] Task 5: `40-platform`
-  - [ ] 5.1: Namespaces, KSAs, IAM bindings, app secrets
-  - [ ] 5.2: Tailscale operator + Valkey + otel-lgtm (beta)
-- [ ] Task 6: `50-edge`
-  - [ ] 6.1: Web bucket + CDN + SPA error policy
-  - [ ] 6.2: Certs + ALB + Gateway for API
-- [ ] Task 7: k8s app manifests (kustomize)
-  - [ ] 7.1: Base + beta/prod overlays
-- [ ] Task 8: CI/CD workflows
-  - [ ] 8.1: tofu plan/apply pipeline
-  - [ ] 8.2: Backend deploy (beta on main, prod on tag)
-  - [ ] 8.3: Web deploy (beta image / prod bucket+CDN)
-- [ ] Task 9: Mobile release setup
-  - [ ] 9.1: EAS build profiles + channels
-- [ ] Task 10: Verification & go-live
+- [x] Task 1: `00-bootstrap`
+  - [x] 1.1: State bucket + API enablement (local state, then migrate)
+  - [x] 1.2: GitHub WIF pool + CI service account
+  - [x] 1.3: Secret Manager entries
+- [x] Task 2: `10-foundation`
+  - [x] 2.1: VPC, subnet, Cloud NAT
+  - [x] 2.2: KMS keyring + `kek-beta`/`kek-prod`
+  - [x] 2.3: Artifact Registry, Maps key adoption, Cloudflare records scaffold
+- [x] Task 3: `20-cluster`
+  - [x] 3.1: GKE Autopilot (private nodes, Workload Identity)
+- [x] Task 4: `30-data`
+  - [x] 4.1: Atlas project + M10 + PSC endpoint
+  - [x] 4.2: DB users + connection secrets
+- [x] Task 5: `40-platform`
+  - [x] 5.1: Namespaces, KSAs, IAM bindings, app secrets
+  - [x] 5.2: Tailscale operator + Valkey + otel-lgtm (beta)
+- [x] Task 6: `50-edge`
+  - [x] 6.1: Web bucket + CDN + SPA error policy
+  - [x] 6.2: Certs + ALB + Gateway for API
+- [x] Task 7: k8s app manifests (kustomize)
+  - [x] 7.1: Base + beta/prod overlays
+- [x] Task 8: CI/CD workflows
+  - [x] 8.1: tofu plan/apply pipeline
+  - [x] 8.2: Backend deploy (beta on main, prod on tag)
+  - [x] 8.3: Web deploy (beta image / prod bucket+CDN)
+- [x] Task 9: Mobile release setup
+  - [x] 9.1: EAS build profiles + channels
+- [ ] Task 10: Verification & go-live — **blocked on the manual prerequisites**; runbook in `infra/README.md`
 
 ## Implementation Details
 
@@ -145,3 +145,51 @@ Prod overlay: namespace prod, replicas 2, Gateway + HTTPRoute (or NEG annotation
 - [ ] 10.6: End-to-end on real devices against beta: full phase-3/5 manual checklists pass over tailnet.
 - [ ] 10.7: Tag `v0.1.0` → prod deploy pipeline green; smoke: sign-in, clock-in/out, calendar, tips.
 - [ ] 10.8: Cost sanity after 48 h: billing report ≈ design §7.5 expectations; no surprise SKUs.
+
+## Completion notes
+
+Tasks 1–9 written and statically verified. **Task 10 is not done and cannot be**: every item needs
+the manual prerequisites (GCP project + billing, Atlas org, Cloudflare token, Tailscale tailnet,
+Auth0 prod tenant, EAS account) and a real apply that starts the ~$170/mo bill. The runbook lives in
+`infra/README.md`; nothing in this phase has been applied, so no cloud resource exists and no cost
+has been incurred.
+
+**Verified** (everything checkable without credentials):
+
+- `tofu fmt -check -recursive infra` clean; `tofu validate` passes on all six stacks against the
+  real provider schemas (google 7.44, mongodbatlas 2.16, cloudflare 5.23, kubernetes 3.2, helm 3.2).
+  Validate resolves every attribute name against the downloaded schema, so the resource shapes are
+  checked, not guessed.
+- `kubectl kustomize` renders both overlays; prod carries the NEG annotation, 2 replicas and
+  `minReplicas: 2`; beta carries the tailscale annotations on `api` and `web`.
+- `actionlint` 0 findings on all four workflows. `web/Dockerfile` builds and serves `/table` → 200
+  with `no-cache`, assets immutable, as uid 101 on :8080. `mobile/eas.json` parses; `tsc --noEmit`
+  passes in `mobile/`.
+- Secret keys in `api-env` match `backend/internal/config/config.go` exactly (`MONGO_URI`,
+  `MONGO_DB`, `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `KEK_MODE`, `KMS_KEY_NAME`, `VALKEY_ADDR`).
+  `MONGO_DB` is set per env because its default (`clockit_local`) is wrong everywhere in cloud.
+
+**Deviations from the plan, and why** (all recorded in `infra/README.md`):
+
+1. **API behind a standalone NEG, not a GKE Gateway** — the plan's own 6.2 fallback, taken by
+   default. A Gateway provisions its own load balancer and cannot serve a GCS backend bucket, so
+   "one global external ALB for both hosts" (design §7.1, and the §7.5 single-forwarding-rule cost
+   line) is only reachable through a tofu-owned backend service. Cost: `50-edge` must apply *after*
+   `kubectl apply -k overlays/prod` has created the NEGs, and `api_neg_zones` may need narrowing.
+2. **SPA error policy on the URL map, not the backend bucket** — `google_compute_backend_bucket`
+   has no error-policy field in google 7.44 (checked in the provider schema);
+   `path_matcher.default_custom_error_response_policy` does, in GA. No `google-beta` pin needed.
+3. **Atlas PSC**: one address + one forwarding rule, per the provider's current
+   `gcp-port-mapped` example. Legacy needed 50.
+4. **Two Atlas secrets** (`atlas-public-key` / `atlas-private-key`) rather than one `atlas-api-key`
+   — the provider takes the halves separately.
+5. **Auth0 domain/audience are tfvars, not Secret Manager** — the API only verifies JWTs, so no
+   client secret exists to protect. The `auth0-beta` / `auth0-prod` shells are still created.
+6. **The Maps key is created, not imported.** A committed `import` block with an unknown key id
+   breaks every plan, including CI's. The adoption snippet is in `infra/README.md`.
+7. **Stack inputs travel as `TF_VAR_*`**, not committed tfvars — `.gitignore` ignores `*.tfvars`,
+   so a committed one would silently never reach CI.
+8. **Control-plane authorized networks default to `0.0.0.0/0`** — GitHub-hosted runners have no
+   stable egress range. IAM still gates the endpoint. <!-- ponytail: narrow when CI gets fixed IPs -->
+9. **Prod OTel exporter is `debug`** with a `TODO(owner)` — the backend pick (HyperDX /
+   OpenObserve / Grafana Cloud, design §11.7) is a human decision; the config map is the seam.
