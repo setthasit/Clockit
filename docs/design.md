@@ -41,7 +41,10 @@ clockit/
 
 ## 3. Authentication (Auth0)
 
-Two Auth0 tenants: `clockit-beta`, `clockit-prod` (standard env separation, both on free tier — currently 25k MAU).
+**One** Auth0 tenant, `clockit.ca.auth0.com`, shared by beta and prod — the free tier allows a single tenant. Consequences, all accepted:
+
+- The same Applications serve both environments, so their callback/logout/origin URLs must list the local, tailnet **and** production URLs together.
+- Beta and prod issue interchangeable tokens (same issuer, same audience). That grants nobody anything they could not already get: there is no signup endpoint and no allowlist — the first authenticated request provisions a user (§4.3) and any user may create an employer, so production sign-up is open to the public by design. Environment isolation is at the data layer: separate databases, KMS keys and service accounts.
 
 Per tenant:
 
