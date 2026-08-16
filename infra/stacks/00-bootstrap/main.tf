@@ -32,8 +32,10 @@ locals {
     "artifactregistry.googleapis.com",
     "certificatemanager.googleapis.com",
     "cloudkms.googleapis.com",
+    "cloudresourcemanager.googleapis.com", # google_project_iam_member
     "compute.googleapis.com",
     "container.googleapis.com",
+    "iam.googleapis.com", # google_service_account
     "iamcredentials.googleapis.com",
     "apikeys.googleapis.com",
     "secretmanager.googleapis.com",
