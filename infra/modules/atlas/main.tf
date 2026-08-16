@@ -8,9 +8,13 @@ variable "cluster_name" {
   default = "clockit"
 }
 variable "atlas_region" {
-  description = "Atlas region name; must be the GCP region so PSC can attach."
+  description = <<-EOT
+    Atlas's own name for the GCP region, which is not GCP's. CENTRAL_US is
+    us-central1 — PSC only attaches when the two are the same physical region.
+    Valid values: GET /clusters/provider/regions?providers=GCP
+  EOT
   type        = string
-  default     = "US_CENTRAL1"
+  default     = "CENTRAL_US"
 }
 variable "instance_size" {
   type    = string
