@@ -103,6 +103,8 @@ resource "google_iam_workload_identity_pool" "github" {
   project                   = var.project_id
   workload_identity_pool_id = "github"
   display_name              = "GitHub Actions"
+
+  depends_on = [google_project_service.this]
 }
 
 resource "google_iam_workload_identity_pool_provider" "github" {
@@ -126,6 +128,8 @@ resource "google_service_account" "ci" {
   project      = var.project_id
   account_id   = "ci-deployer"
   display_name = "GitHub Actions deployer"
+
+  depends_on = [google_project_service.this]
 }
 
 resource "google_service_account_iam_member" "ci_wif" {
@@ -139,8 +143,12 @@ resource "google_project_iam_member" "ci" {
   project  = var.project_id
   role     = each.value
   member   = "serviceAccount:${google_service_account.ci.email}"
+
+  depends_on = [google_project_service.this]
 }
 
+// Without this, tofu creates the secrets in parallel with enabling the API they
+// need, and the first apply on a fresh project fails.
 resource "google_secret_manager_secret" "this" {
   for_each  = toset(local.secrets)
   project   = var.project_id
@@ -149,6 +157,8 @@ resource "google_secret_manager_secret" "this" {
   replication {
     auto {}
   }
+
+  depends_on = [google_project_service.this]
 }
 
 resource "google_secret_manager_secret_iam_member" "ci" {
