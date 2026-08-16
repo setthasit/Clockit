@@ -1,0 +1,35 @@
+# Layer-7 Tailscale Ingress, not the layer-3 `tailscale.com/expose` annotation.
+# L3 forwards raw TCP, so the tailnet name would only serve http:// — and iOS ATS
+# plus Android's default cleartext policy would block the mobile app outright.
+# ingressClassName: tailscale terminates TLS with a Let's Encrypt cert for the
+# MagicDNS name, which is what EXPO_PUBLIC_API_URL / VITE_API_URL point at.
+# Requires HTTPS enabled on the tailnet.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: api
+      port:
+        number: 80
+  tls:
+    - hosts:
+        - clockit-api-beta
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: web
+      port:
+        number: 80
+  tls:
+    - hosts:
+        - clockit-web-beta
