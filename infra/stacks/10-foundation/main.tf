@@ -15,6 +15,11 @@ terraform {
 provider "google" {
   project = var.project_id
   region  = var.region
+
+  # google_apikeys_key refuses to run on user ADC unless the request carries an
+  # explicit quota project (X-Goog-User-Project).
+  user_project_override = true
+  billing_project       = var.project_id
 }
 
 variable "project_id" { type = string }
