@@ -8,6 +8,15 @@ variable "web_host" { type = string }
 variable "api_host" { type = string }
 variable "web_bucket_name" { type = string }
 variable "cloudflare_zone_id" { type = string }
+variable "network" {
+  description = "VPC self link, for the health-check firewall rule."
+  type        = string
+}
+variable "api_container_port" {
+  description = "Port the NEG endpoints listen on (the Service's targetPort)."
+  type        = number
+  default     = 8080
+}
 variable "api_neg_name" {
   description = "Standalone NEG name from the prod Service annotation."
   type        = string
@@ -62,6 +71,22 @@ data "google_compute_network_endpoint_group" "api" {
   project  = var.project_id
   name     = var.api_neg_name
   zone     = each.value
+}
+
+# A GKE-managed Ingress would open this itself; a standalone NEG is ours to wire,
+# and without it every endpoint reports UNHEALTHY and the ALB serves nothing.
+# These two ranges are Google's health-check probers, not general internet.
+resource "google_compute_firewall" "health_checks" {
+  project       = var.project_id
+  name          = "${var.name}-allow-health-checks"
+  network       = var.network
+  direction     = "INGRESS"
+  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
+
+  allow {
+    protocol = "tcp"
+    ports    = [tostring(var.api_container_port)]
+  }
 }
 
 resource "google_compute_health_check" "api" {

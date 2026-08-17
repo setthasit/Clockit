@@ -80,6 +80,7 @@ module "edge" {
   api_host           = var.api_host
   web_bucket_name    = var.web_bucket_name
   api_neg_zones      = var.api_neg_zones
+  network            = data.terraform_remote_state.foundation.outputs.network_id
   cloudflare_zone_id = data.terraform_remote_state.foundation.outputs.cloudflare_zone_id
 }
 
