@@ -212,16 +212,40 @@ resource "kubernetes_service_v1" "grafana_beta" {
   metadata {
     name      = "grafana"
     namespace = module.platform["beta"].namespace
-    annotations = {
-      "tailscale.com/expose"   = "true"
-      "tailscale.com/hostname" = "clockit-grafana-beta"
-    }
   }
   spec {
     selector = { app = "otel" }
     port {
       port        = 3000
       target_port = 3000
+    }
+  }
+}
+
+# Layer-7, not the `tailscale.com/expose` annotation: that provisions an L3 proxy
+# needing privileged + CAP_NET_ADMIN, which Autopilot's warden rejects outright.
+# Tailscale documents the same limitation for EKS Fargate — Ingress is supported
+# on such clusters, ingress Services are not. L7 also gets a TLS cert for free.
+resource "kubernetes_ingress_v1" "grafana_beta" {
+  metadata {
+    name      = "grafana"
+    namespace = module.platform["beta"].namespace
+  }
+
+  spec {
+    ingress_class_name = "tailscale"
+
+    default_backend {
+      service {
+        name = kubernetes_service_v1.grafana_beta.metadata[0].name
+        port {
+          number = 3000
+        }
+      }
+    }
+
+    tls {
+      hosts = ["clockit-grafana-beta"]
     }
   }
 }

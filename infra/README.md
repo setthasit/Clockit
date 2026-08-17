@@ -76,6 +76,11 @@ gcloud compute network-endpoint-groups list --filter="name=clockit-api-prod"
     id = "projects/<project-number>/locations/global/keys/<key-id>"
   }
   ```
+- **Tailscale exposure is layer-7 `Ingress` only, never `tailscale.com/expose`.** The L3 ingress
+  Service provisions a proxy needing privileged + `CAP_NET_ADMIN`, and Autopilot's warden rejects it
+  (`autogke-disallow-privilege`). Tailscale documents the same limitation for EKS Fargate: Ingress is
+  supported on such clusters, ingress Services are not. L7 also terminates TLS with a Let's Encrypt
+  cert, which the mobile app needs — iOS ATS and Android's cleartext policy both block plain http.
 - **Control-plane authorized networks default to `0.0.0.0/0`** because GitHub-hosted runners have no stable egress range. The endpoint still requires IAM. Narrow `authorized_networks` in `20-cluster` if CI moves to fixed IPs.
 
 ## Go-live verification (phase 6 task 10)
