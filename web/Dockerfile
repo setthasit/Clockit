@@ -1,4 +1,6 @@
-FROM node:22-alpine AS build
+# Native build stage: the output is platform-neutral JS, only nginx below needs
+# to match the cluster's architecture.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
