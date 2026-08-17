@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -56,6 +57,8 @@ export default function Profile() {
   const { clearSession, clearCredentials } = useAuth0();
   const me = useSessionStore((s) => s.me);
   const setProfile = useSessionStore((s) => s.setProfile);
+  const loadMe = useSessionStore((s) => s.loadMe);
+  const [refreshing, setRefreshing] = useState(false);
   // The honest count of writes no server has seen, straight from the queue that owns them.
   const queued = useOutboxStore((s) => s.items.length);
 
@@ -75,6 +78,20 @@ export default function Profile() {
 
   const name = me.user.name;
   const dirty = draft !== name;
+
+  // The only way memberships update after launch: the backend claims invitations on every
+  // GET /v1/me, but the gate loads `me` once. Failure is silent — the spinner stops and the
+  // stale-but-valid data stays, the same call loadMe() itself makes at launch.
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadMe();
+    } catch {
+      // ponytail: no error banner; a failed pull just ends. Add copy if workers report confusion.
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const save = async () => {
     const next = draft.trim();
@@ -139,7 +156,18 @@ export default function Profile() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void refresh()}
+          tintColor={theme.brand}
+          colors={[theme.brand]}
+        />
+      }
+    >
       <View style={styles.section}>
         <Text accessibilityRole="header" style={styles.sectionTitle}>
           Your details
@@ -225,7 +253,8 @@ export default function Profile() {
         {me.memberships.length === 0 ? (
           <Text style={styles.note}>
             You’re not a member of any employer yet. Shifts you record are
-            personal until one adds you.
+            personal until one adds you. Pull down to check again after your
+            employer adds your email.
           </Text>
         ) : (
           me.memberships.map((m) => (
