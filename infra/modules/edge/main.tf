@@ -40,6 +40,13 @@ resource "google_storage_bucket" "web" {
   location                    = upper(var.region)
   uniform_bucket_level_access = true
   force_destroy               = false
+
+  # Without this the bucket answers "/" with an XML object listing under a 200,
+  # so the app never loads at the bare domain and the error policy never fires
+  # (it only rewrites 404s). main_page_suffix maps "/" to the SPA entrypoint.
+  website {
+    main_page_suffix = "index.html"
+  }
 }
 
 resource "google_storage_bucket_iam_member" "public_read" {
@@ -54,13 +61,13 @@ resource "google_compute_backend_bucket" "web" {
   bucket_name = google_storage_bucket.web.name
   enable_cdn  = true
 
+  # Honour the object's own Cache-Control instead of imposing a TTL: the deploy
+  # sets immutable/1y on hashed assets and no-cache on index.html, and
+  # CACHE_ALL_STATIC's client_ttl would silently cap both at its own value.
   cdn_policy {
-    cache_mode        = "CACHE_ALL_STATIC"
-    client_ttl        = 3600
-    default_ttl       = 3600
-    max_ttl           = 86400
-    negative_caching  = true
-    serve_while_stale = 86400
+    cache_mode        = "USE_ORIGIN_HEADERS"
+    negative_caching  = false
+    serve_while_stale = 0
   }
 }
 
