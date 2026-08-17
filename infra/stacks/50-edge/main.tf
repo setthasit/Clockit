@@ -38,9 +38,16 @@ variable "web_bucket_name" {
   default = "clockit-web-prod"
 }
 variable "api_neg_zones" {
-  description = "Zones where the prod Service's standalone NEG exists. See modules/edge."
+  description = <<-EOT
+    Zones where GKE actually created the prod standalone NEG — discovered, not chosen:
+      gcloud compute network-endpoint-groups list --filter="name=clockit-api-prod"
+    Autopilot only provisions nodes where it needs them, so this is a subset of the
+    region's zones. If it later scales into a new zone, GKE adds a NEG there that this
+    backend service does not reference and those pods receive no ALB traffic — re-run
+    this stack with the zone added.
+  EOT
   type        = list(string)
-  default     = ["us-central1-a", "us-central1-b", "us-central1-c"]
+  default     = ["us-central1-b", "us-central1-c"]
 }
 
 provider "google" {

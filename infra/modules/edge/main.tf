@@ -172,11 +172,30 @@ resource "google_certificate_manager_certificate" "this" {
   }
 }
 
+# A global target proxy cannot reference a Certificate Manager certificate
+# directly ("Cloud certificate reference is not supported") — it takes a
+# certificate MAP, whose entries bind each hostname to the cert.
+resource "google_certificate_manager_certificate_map" "this" {
+  project = var.project_id
+  name    = var.name
+}
+
+resource "google_certificate_manager_certificate_map_entry" "host" {
+  for_each     = toset([var.web_host, var.api_host])
+  project      = var.project_id
+  name         = "${var.name}-${replace(each.value, ".", "-")}"
+  map          = google_certificate_manager_certificate_map.this.name
+  hostname     = each.value
+  certificates = [google_certificate_manager_certificate.this.id]
+}
+
 resource "google_compute_target_https_proxy" "this" {
-  project                          = var.project_id
-  name                             = var.name
-  url_map                          = google_compute_url_map.this.id
-  certificate_manager_certificates = [google_certificate_manager_certificate.this.id]
+  project         = var.project_id
+  name            = var.name
+  url_map         = google_compute_url_map.this.id
+  certificate_map = "//certificatemanager.googleapis.com/${google_certificate_manager_certificate_map.this.id}"
+
+  depends_on = [google_certificate_manager_certificate_map_entry.host]
 }
 
 resource "google_compute_global_forwarding_rule" "https" {
