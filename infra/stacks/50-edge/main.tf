@@ -44,10 +44,13 @@ variable "api_neg_zones" {
     Autopilot only provisions nodes where it needs them, so this is a subset of the
     region's zones. If it later scales into a new zone, GKE adds a NEG there that this
     backend service does not reference and those pods receive no ALB traffic — re-run
-    this stack with the zone added.
+    this stack with the zone added. Re-check after any node-pool or upgrade event, not
+    just after a deploy: Autopilot has already moved once, from -c to -f. Listing a zone
+    whose NEG is empty costs nothing, so keep retired zones in place; listing one that
+    has no NEG at all fails the data lookup, so only add zones the command above prints.
   EOT
   type        = list(string)
-  default     = ["us-central1-b", "us-central1-c"]
+  default     = ["us-central1-b", "us-central1-c", "us-central1-f"]
 }
 
 provider "google" {
