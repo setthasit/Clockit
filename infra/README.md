@@ -85,7 +85,10 @@ gcloud compute network-endpoint-groups list --filter="name=clockit-api-prod"
 
 ## Go-live verification (phase 6 task 10)
 
-Run after the first full apply — none of it can be checked before the cloud exists.
+Run after the first full apply — none of it can be checked before the cloud exists. Steps 1–4 need
+the GCP account that owns `clockit-505408` as your **ADC** (`gcloud auth application-default login`)
+and membership in the `hoki-albacore` tailnet; a machine signed into a different tenant or tailnet
+fails them with 403s and DNS misses that look like broken infrastructure. Step 5 is public.
 
 1. `tofu plan` clean on every stack (no perma-diff).
 2. From a tailnet device: `curl https://clockit-api-beta.<tailnet>.ts.net/healthz` → 200; beta web loads; beta Grafana (`clockit-grafana-beta`) shows traces. Off tailnet: unreachable.
