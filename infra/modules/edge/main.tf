@@ -183,12 +183,14 @@ resource "google_certificate_manager_dns_authorization" "this" {
   domain   = each.value
 }
 
+# GCP hands back fully-qualified names with a trailing dot; Cloudflare stores them
+# without one, so keeping the dot makes every plan propose the same no-op edit.
 resource "cloudflare_dns_record" "dns_auth" {
   for_each = google_certificate_manager_dns_authorization.this
   zone_id  = var.cloudflare_zone_id
-  name     = each.value.dns_resource_record[0].name
+  name     = trimsuffix(each.value.dns_resource_record[0].name, ".")
   type     = each.value.dns_resource_record[0].type
-  content  = each.value.dns_resource_record[0].data
+  content  = trimsuffix(each.value.dns_resource_record[0].data, ".")
   ttl      = 300
   proxied  = false
 }

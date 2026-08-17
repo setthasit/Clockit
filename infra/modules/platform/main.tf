@@ -87,7 +87,21 @@ resource "kubernetes_deployment_v1" "valkey" {
       metadata {
         labels = { app = "valkey" }
       }
+      # ephemeral-storage, the dropped capability and the seccomp profile are all
+      # injected by Autopilot's admission webhook. Declaring them keeps plan quiet;
+      # omitting them makes every plan propose removing them, forever.
       spec {
+        security_context {
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+        toleration {
+          key      = "kubernetes.io/arch"
+          operator = "Equal"
+          value    = "amd64"
+          effect   = "NoSchedule"
+        }
         container {
           name  = "valkey"
           image = "valkey/valkey:8-alpine"
@@ -96,12 +110,19 @@ resource "kubernetes_deployment_v1" "valkey" {
           }
           resources {
             requests = {
-              cpu    = "100m"
-              memory = "256Mi"
+              cpu                 = "100m"
+              memory              = "256Mi"
+              "ephemeral-storage" = "1Gi"
             }
             limits = {
-              cpu    = "250m"
-              memory = "256Mi"
+              cpu                 = "250m"
+              memory              = "256Mi"
+              "ephemeral-storage" = "1Gi"
+            }
+          }
+          security_context {
+            capabilities {
+              drop = ["NET_RAW"]
             }
           }
         }
