@@ -10,6 +10,25 @@ replicas:
 # serve both the web bucket and the API, and a GKE Gateway provisions its own LB.
 # The NEG is attached to a google_compute_backend_service in stack 50-edge.
 patches:
+  # One ALB, but two host rules — the SPA at clockit.setthasit.dev calls
+  # api.clockit.setthasit.dev, so the browser treats it as cross-origin and preflights.
+  # Same host deploy-web.yml builds the prod bundle's VITE_API_URL against.
+  - target:
+      kind: Deployment
+      name: api
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api
+                env:
+                  - name: CORS_ORIGINS
+                    value: https://clockit.setthasit.dev
   # Without this the HPA's minReplicas of 1 undoes `replicas: 2` on the first reconcile.
   - target:
       kind: HorizontalPodAutoscaler

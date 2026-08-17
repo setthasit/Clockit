@@ -8,3 +8,23 @@ resources:
 replicas:
   - name: api
     count: 1
+patches:
+  # Beta web and api are separate tailnet names, so every browser call is cross-origin
+  # and preflighted. Must match the host deploy-web.yml builds VITE_API_URL against,
+  # i.e. vars.TAILNET_NAME — rename the tailnet and this needs the same edit.
+  - target:
+      kind: Deployment
+      name: api
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api
+                env:
+                  - name: CORS_ORIGINS
+                    value: https://clockit-web-beta.hoki-albacore.ts.net

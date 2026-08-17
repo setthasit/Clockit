@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,6 +28,12 @@ type Config struct {
 	AnchorRadiusM   int
 	SpeedAnomalyKMH int
 	RateLimitPerMin int
+	// CORSOrigins allowlists the browser origins that may call this API. The web
+	// app is served from a different hostname than the API in every deployed
+	// environment (beta: two tailnet names, prod: two ALB host rules), so without
+	// this the browser blocks every call. Empty disables CORS entirely, which is
+	// right for local dev — the Vite proxy makes those calls same-origin.
+	CORSOrigins []string
 }
 
 func Load() (Config, error) {
@@ -41,6 +48,7 @@ func Load() (Config, error) {
 		KEKLocalKey:     os.Getenv("KEK_LOCAL_KEY"),
 		KMSKeyName:      os.Getenv("KMS_KEY_NAME"),
 		OTelServiceName: getenv("OTEL_SERVICE_NAME", "clockit-api"),
+		CORSOrigins:     getlist("CORS_ORIGINS"),
 	}
 
 	var err error
@@ -89,6 +97,21 @@ func Load() (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("KEK_MODE must be local or kms, got %q", cfg.KEKMode)
 	}
+	// A browser sends Origin as scheme://host[:port] — never with a trailing slash
+	// or path. Such an entry would silently match nothing, and the symptom (a
+	// blocked request in someone's browser) is far from the cause, so reject it at
+	// boot. "*" is refused outright: this API serves hourly rates and location.
+	for _, o := range cfg.CORSOrigins {
+		if o == "*" {
+			return Config{}, fmt.Errorf("CORS_ORIGINS must not contain %q: list the exact web origins", o)
+		}
+		if !strings.HasPrefix(o, "http://") && !strings.HasPrefix(o, "https://") {
+			return Config{}, fmt.Errorf("CORS_ORIGINS entry %q needs an http:// or https:// scheme", o)
+		}
+		if strings.Contains(strings.TrimPrefix(strings.TrimPrefix(o, "http://"), "https://"), "/") {
+			return Config{}, fmt.Errorf("CORS_ORIGINS entry %q must be scheme://host[:port] with no trailing slash or path", o)
+		}
+	}
 	return cfg, nil
 }
 
@@ -97,6 +120,16 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func getlist(key string) []string {
+	var out []string
+	for _, part := range strings.Split(os.Getenv(key), ",") {
+		if v := strings.TrimSpace(part); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func getint(key string, def int) (int, error) {
