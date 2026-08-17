@@ -41,8 +41,7 @@ Production builds need none of this.
 
 ## Values a human must fill before the first build
 
-- `eas.json` → every `REPLACE-ME-*`: the tailnet name in the beta API URL, and the Auth0 beta/prod tenant domain + native client id. `EXPO_PUBLIC_AUTH0_AUDIENCE` is already correct.
-- `eas.json` → `submit.production.ios`: Apple ID, App Store Connect app id, Apple team id.
+- `eas.json` → `submit.production.ios`: Apple ID, App Store Connect app id, Apple team id. These are the only `REPLACE-ME-*` left; the `build.*.env` blocks are filled (one Auth0 tenant serves beta and prod, design §3).
 - `app.config.ts` → after `eas init` + `eas update:configure`, add `extra.eas.projectId` and `updates.url` (the EAS CLI cannot write a TypeScript config, so this edit is manual).
 
 Changing `EXPO_PUBLIC_AUTH0_DOMAIN` requires a new native build — the `react-native-auth0` config plugin bakes it into the native project.

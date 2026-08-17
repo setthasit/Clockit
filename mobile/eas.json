@@ -8,7 +8,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_AUTH0_DOMAIN": "REPLACE-ME-auth0-beta-tenant.us.auth0.com"
+        "EXPO_PUBLIC_AUTH0_DOMAIN": "clockit.ca.auth0.com"
       }
     },
     "beta": {
@@ -19,8 +19,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://clockit-api-beta.hoki-albacore.ts.net",
-        "EXPO_PUBLIC_AUTH0_DOMAIN": "REPLACE-ME-auth0-beta-tenant.us.auth0.com",
-        "EXPO_PUBLIC_AUTH0_CLIENT_ID": "REPLACE-ME-auth0-beta-client-id",
+        "EXPO_PUBLIC_AUTH0_DOMAIN": "clockit.ca.auth0.com",
+        "EXPO_PUBLIC_AUTH0_CLIENT_ID": "Ixo7U3m0muVfJWKxXwH41UPPqXuU4v2y",
         "EXPO_PUBLIC_AUTH0_AUDIENCE": "https://api.clockit.setthasit.dev"
       }
     },
@@ -30,8 +30,8 @@
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.clockit.setthasit.dev",
-        "EXPO_PUBLIC_AUTH0_DOMAIN": "REPLACE-ME-auth0-prod-tenant.us.auth0.com",
-        "EXPO_PUBLIC_AUTH0_CLIENT_ID": "REPLACE-ME-auth0-prod-client-id",
+        "EXPO_PUBLIC_AUTH0_DOMAIN": "clockit.ca.auth0.com",
+        "EXPO_PUBLIC_AUTH0_CLIENT_ID": "Ixo7U3m0muVfJWKxXwH41UPPqXuU4v2y",
         "EXPO_PUBLIC_AUTH0_AUDIENCE": "https://api.clockit.setthasit.dev"
       }
     }
