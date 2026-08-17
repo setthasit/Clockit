@@ -203,10 +203,15 @@ The static checks in the previous session passed; these only surfaced against re
 
 ### Operational notes
 
-- **`api_neg_zones` is discovered, not chosen.** Autopilot placed nodes in `us-central1-b` and `-c`
-  only, so the default is those two. If it later scales into `-a`, GKE creates a NEG there that the
-  backend service does not reference and those pods get no ALB traffic — re-run `50-edge` with the
-  zone added. A GKE Gateway would track this automatically, at the cost of a second load balancer.
+- **`api_neg_zones` is discovered, not chosen — and it drifted within a day.** The first apply saw
+  nodes in `us-central1-b` and `-c`, so the default was those two. Autopilot has since retired `-c`
+  and moved to `-f`, where GKE created a NEG the backend service did not reference: any api pod
+  scheduled there would have received no ALB traffic while Kubernetes reported it healthy, and a node
+  event landing both replicas on `-f` would have taken prod down with everything green. Prod only kept
+  working because both replicas happened to sit on `-b`. Default is now `-b`, `-c`, `-f`; re-check
+  after node-pool and upgrade events, not just deploys. An empty NEG in the list costs nothing, but a
+  zone with no NEG at all fails the `data` lookup, so only add zones the `gcloud` command prints.
+  A GKE Gateway would track this automatically, at the cost of a second load balancer.
 - Images are built locally for now (`docker buildx --platform linux/amd64`); both Dockerfiles build
   natively and cross-compile, so no QEMU. CI cannot take over until the repo variables listed at the
   top of each workflow are set.
