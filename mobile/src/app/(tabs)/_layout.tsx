@@ -1,8 +1,6 @@
-import { SymbolView } from "expo-symbols";
-import { Tabs } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 
-import { theme } from "@/lib/theme";
+import { AppTabs } from "@/components/AppTabs";
 
 /**
  * One `StatusBar` per background colour, and never one at the root. Android's generated AppTheme
@@ -17,52 +15,16 @@ import { theme } from "@/lib/theme";
  *
  * This one covers the whole tab navigator and stays mounted under `entry/[id]` and a pushed
  * `permissions`, both of which are `theme.surface` too.
+ *
+ * The tab bar itself lives in AppTabs — native tabs on iOS/Android, the JS bar on web
+ * (AppTabs.web.tsx). Platform split via component, not `_layout.web.tsx`: Expo Router does not
+ * support platform extensions for route files.
  */
 export default function TabsLayout() {
   return (
     <>
       <StatusBar style="dark" />
-      <Tabs screenOptions={{ tabBarActiveTintColor: theme.brand }}>
-        <Tabs.Screen
-          name="index"
-          options={{
-            title: "Clock",
-            tabBarIcon: ({ color, size }) => (
-              <SymbolView
-                name={{ ios: "clock", android: "schedule" }}
-                size={size}
-                tintColor={color}
-              />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="history"
-          options={{
-            title: "History",
-            tabBarIcon: ({ color, size }) => (
-              <SymbolView
-                name={{ ios: "clock.arrow.circlepath", android: "history" }}
-                size={size}
-                tintColor={color}
-              />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="profile"
-          options={{
-            title: "Profile",
-            tabBarIcon: ({ color, size }) => (
-              <SymbolView
-                name={{ ios: "person.crop.circle", android: "account_circle" }}
-                size={size}
-                tintColor={color}
-              />
-            ),
-          }}
-        />
-      </Tabs>
+      <AppTabs />
     </>
   );
 }
