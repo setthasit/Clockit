@@ -4,8 +4,6 @@ Employee clock-in/clock-out with server-verified location. Employees clock in fr
 
 Monorepo: **Go API** + **Expo mobile app** + **React web app**, local-first, full OpenTelemetry from the first commit.
 
-> Phases 1–5 are built and verified against the local stack. Phase 6 (cloud infrastructure and deploy) is not started — `infra/` is empty by design, since [development is local-first](docs/design.md#9-local-development-cloud-free) so nothing bills until publish.
->
 > This is an MVP/reference implementation, not the shipped product. Design, code, and infrastructure were developed with AI assistance.
 
 ![Architecture](docs/diagrams/architecture.svg)
@@ -34,12 +32,12 @@ The parts worth reading, with the file that holds them.
 
 ## Stack
 
-| Area | Technology |
-|---|---|
-| `backend/` — REST API | Go 1.25, Echo, uber/fx (DI), MongoDB 8, Valkey, Google Cloud KMS, AES-256-GCM, JWT/RS256 (Auth0 JWKS), OpenTelemetry (traces + metrics + logs) |
-| `mobile/` — employee app | React Native 0.86, Expo SDK 57, Expo Router, `@expo/ui` (SwiftUI / Jetpack Compose), Zustand, expo-location + expo-task-manager, Auth0 |
-| `web/` — employer app | React 19, TypeScript, Vite, Astryx (StyleX), React Router, Google Maps JS API, Auth0 |
-| `infra/` — planned (phase 6) | GCP (GKE Autopilot, Cloud CDN, Cloud KMS), MongoDB Atlas over Private Service Connect, Cloudflare DNS, Tailscale, OpenTofu, GitHub Actions with Workload Identity Federation |
+| Area                            | Technology                                                                                                                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/` — REST API           | Go 1.25, Echo, uber/fx (DI), MongoDB 8, Valkey, Google Cloud KMS, AES-256-GCM, JWT/RS256 (Auth0 JWKS), OpenTelemetry (traces + metrics + logs)                               |
+| `mobile/` — employee app        | React Native 0.86, Expo SDK 57, Expo Router, `@expo/ui` (SwiftUI / Jetpack Compose), Zustand, expo-location + expo-task-manager, Auth0                                       |
+| `web/` — employer app           | React 19, TypeScript, Vite, Astryx (StyleX), React Router, Google Maps JS API, Auth0                                                                                         |
+| `infra/` — cloud infrastructure | GCP (GKE Autopilot, Cloud CDN, Cloud KMS), MongoDB Atlas over Private Service Connect, Cloudflare DNS, Tailscale, OpenTofu, GitHub Actions with Workload Identity Federation |
 
 ## Layout
 
@@ -48,8 +46,7 @@ backend/     Go API — cmd/{api,seed}, internal/{auth,crypto,employer,entry,tip
 mobile/      Expo app — src/{app,api,components,lib,location,stores}
 web/         React SPA — src/{routes,components,lib}
 docs/        design.md (authoritative system design) + D2/SVG diagrams
-document/    per-phase implementation plans and completion notes
-infra/       OpenTofu stacks (phase 6, not started)
+infra/       OpenTofu stacks + kustomize manifests
 ```
 
 One package per domain, no barrel files, no re-export hubs.
@@ -82,8 +79,6 @@ cd web && npm test                      # 34 tests (vitest)
 
 378 tests total. They cover the parts where being wrong costs money or leaks data: geo validation and clock-skew rules, envelope seal/open, tip-split rounding, the outbox state machine and its rehydration gate, rate limiting, and index construction. CI (`.github/workflows/ci.yml`) runs build, test and lint per changed area.
 
-Phase 3 shipped with a written [QA findings report](document/clockit/phase-3-qa-findings.md) — five bugs found during manual verification, each with a root cause and a fix commit.
-
 ## API
 
 18 JSON routes under `/v1` plus `/healthz`, all bearer-JWT except the health check. Employee routes cover profile, clock-in/out, entry listing, employer assignment and batched background pings; employer routes cover employers, members, rates, entry ranges, daily tips and the payroll report. Hourly rates are never serialized by an employee-facing endpoint.
@@ -94,19 +89,11 @@ Full table with request shapes: [design §4.2](docs/design.md#42-api).
 
 - **[System design](docs/design.md)** — the authoritative document: auth, data model, envelope crypto, location rules, tip math, observability, infrastructure, cost, and a decisions log. Includes the limitations that were accepted rather than hidden.
 - **Diagrams** — [architecture](docs/diagrams/architecture.svg) · [infrastructure](docs/diagrams/infra.svg) · [clock-in flow](docs/diagrams/clock-in-flow.svg) (D2 sources alongside)
-- **[Implementation plans](document/clockit/)** — six phase documents with task-level checklists and completion notes
+- **[Infrastructure](infra/README.md)** — stack layout, apply order, and the decisions taken while deploying
 
 ## Status
 
-| Phase | Scope | State |
-|---|---|---|
-| 1 | Foundations — compose stack, backend skeleton, fx wiring, envelope crypto, seed script | Done |
-| 2 | Backend APIs — auth, employers/members, clock-in/out + proximity, tips, report, OTel | Done |
-| 3 | Mobile app — auth, clock screen, history, entry detail, offline outbox | Done |
-| 4 | Web app — onboarding, employees, week calendar, table + tips, CSV export | Done |
-| 5 | Background pings, last-seen, polish | Done |
-| 6 | Infrastructure — OpenTofu stacks, CI/CD, beta on tailnet, store submission | Not started |
-| — | Hardening — Play Integrity / App Attest, alerting, backup drill | Planned |
+Backend, mobile, web and cloud infrastructure are built; the stacks are applied and serving. Remaining before a store release: end-to-end verification on real devices against beta, the tagged prod release pipeline run, and hardening (Play Integrity / App Attest, alerting, backup drill).
 
 ## License
 

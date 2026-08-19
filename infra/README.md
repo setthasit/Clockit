@@ -64,7 +64,7 @@ gcloud compute network-endpoint-groups list --filter="name=clockit-api-prod"
 
 ## Decisions taken while implementing
 
-- **API behind a standalone NEG, not a GKE Gateway** (plan task 6.2 fallback). A Gateway provisions its own load balancer, which cannot also serve a GCS backend bucket — two LBs, two IPs, two certs. The NEG lets one URL map host both `clockit.setthasit.dev` and `api.clockit.setthasit.dev`, which is what design §7.1 and the cost table assume. Price: the apply-order note above.
+- **API behind a standalone NEG, not a GKE Gateway**. A Gateway provisions its own load balancer, which cannot also serve a GCS backend bucket — two LBs, two IPs, two certs. The NEG lets one URL map host both `clockit.setthasit.dev` and `api.clockit.setthasit.dev`, which is what design §7.1 and the cost table assume. Price: the apply-order note above.
 - **SPA fallback lives on the URL map**, not the backend bucket: `google_compute_backend_bucket` has no error-policy field in google 7.x. `path_matcher.default_custom_error_response_policy` maps 404 → `/index.html` with response code 200. GA provider, no `google-beta` needed.
 - **Atlas PSC is port-mapped**: one address + one forwarding rule (the deprecated legacy architecture needed 50).
 - **Two Atlas secrets** (`atlas-public-key`, `atlas-private-key`) instead of one `atlas-api-key` — the provider takes both halves separately.
@@ -83,7 +83,7 @@ gcloud compute network-endpoint-groups list --filter="name=clockit-api-prod"
   cert, which the mobile app needs — iOS ATS and Android's cleartext policy both block plain http.
 - **Control-plane authorized networks default to `0.0.0.0/0`** because GitHub-hosted runners have no stable egress range. The endpoint still requires IAM. Narrow `authorized_networks` in `20-cluster` if CI moves to fixed IPs.
 
-## Go-live verification (phase 6 task 10)
+## Go-live verification
 
 Run after the first full apply — none of it can be checked before the cloud exists. Steps 1–4 need
 the GCP account that owns `clockit-505408` as your **ADC** (`gcloud auth application-default login`)
@@ -95,6 +95,6 @@ fails them with 403s and DNS misses that look like broken infrastructure. Step 5
 3. Atlas → Network Access has no public entries; `mongosh` works from a pod, fails from a laptop.
 4. `gcloud --impersonate-service-account=api-beta@… kms decrypt --key=kek-prod …` → permission denied.
 5. `https://clockit.setthasit.dev` loads; `https://clockit.setthasit.dev/table` on refresh → 200; `https://api.clockit.setthasit.dev/healthz` → 200; certs valid.
-6. Phase 3 + 5 manual checklists on real devices against beta.
+6. Full mobile + web manual checks on real devices against beta: sign-in, clock in/out (in and out of range), offline queue replay, background pings advancing "last seen".
 7. Tag `v0.1.0` → prod pipeline green → smoke: sign-in, clock in/out, calendar, tips.
 8. After 48 h, billing report ≈ design §7.5 (~$170/mo), no surprise SKUs.
