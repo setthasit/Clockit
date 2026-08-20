@@ -176,7 +176,7 @@ function Gate() {
   const spinner = (
     <View style={styles.screen}>
       <StatusBar style="light" />
-      <ActivityIndicator color={theme.surface} />
+      <ActivityIndicator color={theme.onBrand} />
     </View>
   );
 
@@ -302,7 +302,7 @@ const styles = StyleSheet.create({
     padding: theme.spacing.l,
   },
   message: {
-    color: theme.surface,
+    color: theme.onBrand,
     fontSize: 16,
     textAlign: "center",
     marginBottom: theme.spacing.m,
@@ -312,7 +312,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: theme.spacing.l,
     borderRadius: theme.radius.m,
-    backgroundColor: theme.surface,
+    // Fixed-white control on the scheme-stable brand fill: onBrand fill + static brand label.
+    backgroundColor: theme.onBrand,
   },
   retryLabel: { color: theme.brand, fontSize: 16, fontWeight: "600" },
   pressed: { opacity: 0.7 },

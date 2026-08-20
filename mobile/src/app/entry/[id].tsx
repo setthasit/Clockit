@@ -177,7 +177,7 @@ export default function EntryDetail() {
       return (
         <ActivityIndicator
           accessibilityLabel="Loading shift"
-          color={theme.brand}
+          color={theme.brandTint}
           style={styles.loading}
         />
       );
@@ -201,7 +201,7 @@ export default function EntryDetail() {
         <RefreshControl
           refreshing={refreshing}
           onRefresh={onRefresh}
-          tintColor={theme.brand}
+          tintColor={theme.brandTint}
         />
       }
     >
@@ -401,7 +401,7 @@ const styles = StyleSheet.create({
   assigned: { color: theme.ok, fontSize: 15, fontWeight: "600", lineHeight: 21 },
   // 48 pt targets, matching the clock and History screens' inline actions.
   row: { minHeight: 48, justifyContent: "center" },
-  rowLabel: { color: theme.brand, fontSize: 17, fontWeight: "600" },
+  rowLabel: { color: theme.brandTint, fontSize: 17, fontWeight: "600" },
   // minWidth too: alignSelf shrinks the row to its label, and a short one lands under the 44 pt
   // minimum with no horizontal padding to make it up.
   action: {
@@ -410,7 +410,7 @@ const styles = StyleSheet.create({
     minWidth: 48,
     justifyContent: "center",
   },
-  actionLabel: { color: theme.brand, fontSize: 16, fontWeight: "600" },
+  actionLabel: { color: theme.brandTint, fontSize: 16, fontWeight: "600" },
   pressed: { opacity: 0.6 },
   errorBox: { gap: theme.spacing.s / 2 },
   errorText: { color: theme.danger, fontSize: 14, lineHeight: 20 },

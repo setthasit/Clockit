@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.m,
     backgroundColor: theme.brand,
   },
-  primaryLabel: { color: theme.surface, fontSize: 16, fontWeight: "600" },
+  primaryLabel: { color: theme.onBrand, fontSize: 16, fontWeight: "600" },
   secondary: {
     minHeight: 48,
     alignItems: "center",

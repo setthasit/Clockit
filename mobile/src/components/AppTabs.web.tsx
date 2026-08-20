@@ -12,7 +12,7 @@ export function AppTabs() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: theme.brand,
+        tabBarActiveTintColor: theme.brandTint,
       }}
     >
       <Tabs.Screen

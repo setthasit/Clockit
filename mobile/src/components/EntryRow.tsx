@@ -204,10 +204,11 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing.s / 2,
     paddingHorizontal: theme.spacing.m,
   },
-  chipEmployer: { borderColor: theme.brand },
+  // Outline chip follows its label's tint: brand-blue border would vanish on the dark surface.
+  chipEmployer: { borderColor: theme.brandTint },
   chipPersonal: { borderColor: theme.muted },
   chipLabel: { fontSize: 13, fontWeight: "600" },
-  chipLabelEmployer: { color: theme.brand },
+  chipLabelEmployer: { color: theme.brandTint },
   chipLabelPersonal: { color: theme.muted },
   times: { color: theme.text, fontSize: 16, fontWeight: "600" },
   duration: { color: theme.muted, fontSize: 14 },

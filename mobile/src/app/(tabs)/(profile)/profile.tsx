@@ -163,8 +163,8 @@ export default function Profile() {
         <RefreshControl
           refreshing={refreshing}
           onRefresh={() => void refresh()}
-          tintColor={theme.brand}
-          colors={[theme.brand]}
+          tintColor={theme.brandTint}
+          colors={[theme.brandTint]}
         />
       }
     >
@@ -203,7 +203,7 @@ export default function Profile() {
               {saving ? (
                 <ActivityIndicator
                   accessibilityLabel="Saving your name"
-                  color={theme.brand}
+                  color={theme.brandTint}
                 />
               ) : (
                 <Text style={styles.actionLabel}>Save</Text>
@@ -412,7 +412,7 @@ const styles = StyleSheet.create({
     minWidth: 48,
     justifyContent: "center",
   },
-  actionLabel: { color: theme.brand, fontSize: 16, fontWeight: "600" },
+  actionLabel: { color: theme.brandTint, fontSize: 16, fontWeight: "600" },
   dangerLabel: { color: theme.danger, fontSize: 16, fontWeight: "600" },
   pressed: { opacity: 0.6 },
   note: { color: theme.muted, fontSize: 14, lineHeight: 20 },

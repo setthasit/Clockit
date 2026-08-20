@@ -205,5 +205,5 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     paddingVertical: theme.spacing.s,
   },
-  cancel: { color: theme.brand, fontSize: 17, fontWeight: "600" },
+  cancel: { color: theme.brandTint, fontSize: 17, fontWeight: "600" },
 });

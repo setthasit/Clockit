@@ -339,9 +339,9 @@ const styles = StyleSheet.create({
     padding: theme.spacing.l,
     gap: theme.spacing.s,
   },
-  employer: { color: theme.surface, fontSize: 20, fontWeight: "700" },
-  since: { color: theme.surface, fontSize: 15, opacity: 0.85 },
-  elapsed: { color: theme.surface, fontSize: 34, fontWeight: "700" },
+  employer: { color: theme.onBrand, fontSize: 20, fontWeight: "700" },
+  since: { color: theme.onBrand, fontSize: 15, opacity: 0.85 },
+  elapsed: { color: theme.onBrand, fontSize: 34, fontWeight: "700" },
   // Outlined rather than filled: "subtle" per the plan.
   pill: {
     alignSelf: "center",
@@ -382,6 +382,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: theme.spacing.m,
   },
-  actionLabel: { color: theme.brand, fontSize: 16, fontWeight: "600" },
+  actionLabel: { color: theme.brandTint, fontSize: 16, fontWeight: "600" },
   pressed: { opacity: 0.7 },
 });

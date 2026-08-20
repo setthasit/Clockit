@@ -241,7 +241,7 @@ export default function History() {
         <RefreshControl
           refreshing={refreshing}
           onRefresh={onRefresh}
-          tintColor={theme.brand}
+          tintColor={theme.brandTint}
         />
       }
       style={styles.screen}
@@ -286,7 +286,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.m,
     padding: theme.spacing.m,
   },
-  bannerLabel: { color: theme.surface, fontSize: 15, fontWeight: "600" },
+  bannerLabel: { color: theme.onBrand, fontSize: 15, fontWeight: "600" },
   attention: {
     borderWidth: 1,
     borderColor: theme.warn,
@@ -304,7 +304,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
     justifyContent: "center",
   },
-  actionLabel: { color: theme.brand, fontSize: 16, fontWeight: "600" },
+  actionLabel: { color: theme.brandTint, fontSize: 16, fontWeight: "600" },
   pressed: { opacity: 0.7 },
   day: {
     backgroundColor: theme.surface,

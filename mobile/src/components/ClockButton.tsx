@@ -61,14 +61,17 @@ export function ClockButton({
         style={[styles.button, disabled && styles.blocked]}
       >
         {busy ? (
-          <ActivityIndicator color={theme.surface} size="large" />
+          // Same fill-dependent swap as the label below, should busy and blocked ever overlap.
+          <ActivityIndicator color={disabled ? theme.surface : theme.onBrand} size="large" />
         ) : (
           // The circle is a fixed 180 pt, so at the largest Dynamic Type sizes the label has to
           // shrink rather than wrap out of it.
           <Text
             adjustsFontSizeToFit
             numberOfLines={1}
-            style={styles.label}
+            // Blocked swaps the fill to `muted`, which flips light in dark mode — static onBrand
+            // white would fail contrast there, while `surface` flips opposite and stays readable.
+            style={[styles.label, disabled && styles.blockedLabel]}
             // ponytail: iOS shrinks to fit, Android only ever picks smaller sizes for a *bounded*
             // box, which this Text has (the circle). Both land inside; the sizes may differ.
           >
@@ -92,5 +95,6 @@ const styles = StyleSheet.create({
   },
   // Busy keeps the brand fill — the button is working, not unavailable.
   blocked: { backgroundColor: theme.muted },
-  label: { color: theme.surface, fontSize: 24, fontWeight: "700" },
+  label: { color: theme.onBrand, fontSize: 24, fontWeight: "700" },
+  blockedLabel: { color: theme.surface },
 });

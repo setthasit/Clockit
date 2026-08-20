@@ -12,7 +12,7 @@ import { theme } from "@/lib/theme";
  */
 export function AppTabs() {
   return (
-    <NativeTabs tintColor={theme.brand}>
+    <NativeTabs tintColor={theme.brandTint}>
       {/* The clock screen is a plain View, not a ScrollView, so iOS 18-and-earlier would draw the
           tab bar transparent over it without this. */}
       <NativeTabs.Trigger name="(clock)" disableTransparentOnScrollEdge>

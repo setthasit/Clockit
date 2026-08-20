@@ -104,14 +104,14 @@ const styles = StyleSheet.create({
     padding: theme.spacing.l,
   },
   wordmark: {
-    color: theme.surface,
+    color: theme.onBrand,
     fontSize: 40,
     fontWeight: "700",
     letterSpacing: 1,
   },
   actions: { alignSelf: "stretch", marginTop: theme.spacing.l * 2 },
   error: {
-    color: theme.surface,
+    color: theme.onBrand,
     fontSize: 15,
     textAlign: "center",
     marginBottom: theme.spacing.m,
@@ -121,7 +121,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.m,
-    backgroundColor: theme.surface,
+    // Fixed-white control on the scheme-stable brand fill: onBrand fill + static brand label.
+    backgroundColor: theme.onBrand,
   },
   buttonLabel: { color: theme.brand, fontSize: 17, fontWeight: "600" },
   pressed: { opacity: 0.7 },

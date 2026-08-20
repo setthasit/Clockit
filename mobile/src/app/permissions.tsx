@@ -81,7 +81,7 @@ export default function Permissions() {
           <SymbolView
             name={{ ios: "location.circle.fill", android: "location_on" }}
             size={72}
-            tintColor={theme.brand}
+            tintColor={theme.brandTint}
           />
         </View>
         <Text accessibilityRole="header" style={styles.title}>
@@ -159,7 +159,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.m,
     backgroundColor: theme.brand,
   },
-  primaryLabel: { color: theme.surface, fontSize: 16, fontWeight: "600" },
+  primaryLabel: { color: theme.onBrand, fontSize: 16, fontWeight: "600" },
   secondary: {
     minHeight: 48,
     alignItems: "center",
