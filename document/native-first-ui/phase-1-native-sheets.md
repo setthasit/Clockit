@@ -32,9 +32,9 @@ Both were built as `Modal` because `@expo/ui`'s `BottomSheet` cannot label rows 
   - [x] 2.1: Add `trackingNotice` to `useUiStore`
   - [x] 2.2: Pin non-persistence in `ui.test.js`
 
-- [ ] Task 3: Clock-in sheet route
-  - [ ] 3.1: Create `mobile/src/app/clock-in.tsx`
-  - [ ] 3.2: Register in root stack with formSheet options
+- [x] Task 3: Clock-in sheet route
+  - [x] 3.1: Create `mobile/src/app/clock-in.tsx`
+  - [x] 3.2: Register in root stack with formSheet options
 
 - [ ] Task 4: Background-location sheet route
   - [ ] 4.1: Create `mobile/src/app/background-location.tsx`

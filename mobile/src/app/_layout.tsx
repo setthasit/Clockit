@@ -263,6 +263,16 @@ function Gate() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="permissions" options={{ title: "Location" }} />
         <Stack.Screen name="entry/[id]" options={{ title: "Shift" }} />
+        <Stack.Screen
+          name="clock-in"
+          options={{
+            presentation: "formSheet",
+            sheetAllowedDetents: "fitToContents",
+            sheetGrabberVisible: true, // iOS-only; Android ignores
+            headerShown: false,
+            contentStyle: { backgroundColor: "transparent" }, // liquid glass on iOS 26+
+          }}
+        />
       </Stack.Protected>
       <Stack.Protected guard={!signedIn}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
