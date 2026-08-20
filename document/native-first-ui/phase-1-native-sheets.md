@@ -20,7 +20,7 @@ Both were built as `Modal` because `@expo/ui`'s `BottomSheet` cannot label rows 
 
 **Non-goals:** no change to `clockFlow.ts` semantics, no change to when the background pitch appears (`askBackground` condition stays byte-identical), no redesign of sheet content copy.
 
-**Dependencies**: none. Independent of phases 2–4.
+**Dependencies**: none. Independent of phases 2–3.
 
 ## Tasks
 
@@ -135,7 +135,7 @@ const select = async (employerId: string | null) => {
 };
 ```
 
-Layout: root `<View style={{ flex: 1 }}>` (formSheet contract), own background color (`theme.surface` until phase 2), rows keep their exact `accessibilityLabel`/no-disabled-state semantics (EmployerSheet.tsx:131-158 comments carry over).
+Layout: root `<View style={{ flex: 1 }}>` (formSheet contract), own background color (`theme.surface`), rows keep their exact `accessibilityLabel`/no-disabled-state semantics (EmployerSheet.tsx:131-158 comments carry over).
 
 Deletions relative to the Modal version — the sheet presentation now owns them:
 - backdrop `Pressable` and its a11y-hiding props,

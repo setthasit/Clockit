@@ -1,10 +1,12 @@
-# Phase 4: Native Feel Polish
+# Phase 3: Native Feel Polish
 
 ## Context
 
 Independent, individually shippable refinements that close the remaining look-and-feel gaps. Each task is optional on its own; none blocks the others. Ordered by value.
 
-**Dependencies**: Phase 1 (sheets) for task ordering only; tasks 2–5 do not depend on phases 2–3.
+Palette rule from Phase 2 applies here too: **no system color APIs** — any new color is a hand-picked pair in `palette.ts`.
+
+**Dependencies**: Phase 1 (sheets) for task ordering only; tasks 1–4 do not depend on Phase 2. Task 5 wants Phase 2's palette mechanism for its grouped-background tokens.
 
 ## Tasks
 
@@ -69,12 +71,12 @@ Costs to check before committing: the preview mounts `/entry/[id]`, which fetche
 
 ### Task 5: Profile as grouped list
 
-**File**: `mobile/src/app/(tabs)/(profile)/profile.tsx`
+**File**: `mobile/src/app/(tabs)/(profile)/profile.tsx` (+ `mobile/src/lib/palette.ts`)
 
-Keep plain RN (the `@expo/ui` a11y objections at profile.tsx:44-55 still hold — do not revisit). Restyle to read as a native settings screen:
+Keep plain RN (the `@expo/ui` a11y objections at profile.tsx:44-55 still hold — do not revisit). Restyle to read as a native settings screen, colors hand-picked (mirroring the iOS grouped idiom without touching system palettes):
 
-- Screen background `Color.ios.systemGroupedBackground` / `Color.android.dynamic.surface` (extend theme with `groupedSurface`).
-- Sections (Account / Employers / App) as inset cards: `secondarySystemGroupedBackground`, radius `theme.radius.m`, `borderCurve: "continuous"`, hairline separators (`StyleSheet.hairlineWidth` + `Color.ios.separator`).
+- New palette pairs: `groupedSurface` `{ light: "#F2F2F7", dark: "#000000" }` (screen background) and `card` `{ light: "#FFFFFF", dark: "#1C1C1E" }` (section background) — proposals, finalized against the Phase 2 AA pass.
+- Sections (Account / Employers / App) as inset cards: `card` background, radius `theme.radius.m`, `borderCurve: "continuous"`, hairline separators (`StyleSheet.hairlineWidth`, `muted` at reduced opacity or a dedicated `separator` pair if that reads muddy).
 - Sign out stays a full-width red row inside the last group (HIG destructive-row idiom) with the existing reveal-confirm flow untouched.
 - All existing a11y labels, busy announcements, and the unsynced-actions warning keep their exact semantics — this task moves pixels only.
 
