@@ -48,9 +48,9 @@ Both were built as `Modal` because `@expo/ui`'s `BottomSheet` cannot label rows 
 - [x] Task 6: Delete Modal sheets
   - [x] 6.1: Remove `EmployerSheet.tsx` and `BackgroundSheet.tsx`
 
-- [ ] Task 7: Verification
-  - [ ] 7.1: Typecheck + unit tests
-  - [ ] 7.2: On-device sheet behavior (iOS + Android)
+- [x] Task 7: Verification
+  - [x] 7.1: Typecheck + unit tests
+  - [x] 7.2: On-device sheet behavior (iOS + Android)
 
 ## Implementation Details
 

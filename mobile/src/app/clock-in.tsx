@@ -1,6 +1,6 @@
 import { Redirect, router } from "expo-router";
 import { useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { clockInNow, UNEXPECTED_ERROR } from "@/lib/clockFlow";
 import { formatDistance } from "@/lib/format";
@@ -18,8 +18,9 @@ import { useSessionStore } from "@/stores/session";
  * ModifierRegistry registers no contentDescription on Android) never applied to this shape.
  * The presentation now owns what the Modal built by hand, so those parts are gone: the backdrop
  * `Pressable` and its a11y-hiding props, `accessibilityViewIsModal`, the `useSafeAreaInsets`
- * bottom padding (the OS insets the sheet), `onRequestClose` (Android back pops the route
- * natively), the `visible` prop machinery, and the `maxHeight: "80%"` bound.
+ * bottom padding (see the sheet style note for who owns the bottom edge now), `onRequestClose`
+ * (Android back pops the route natively), the `visible` prop machinery, and the
+ * `maxHeight: "80%"` bound.
  *
  * Owning its state rather than receiving props: the clock screen's poller tears down when this
  * route takes focus, so the sheet polls for itself, and the selection semantics live here —
@@ -74,8 +75,16 @@ export default function ClockIn() {
       {/* Membership order, never nearest-first: `fix` refreshes every 15 s and this sheet can be
           open across a poll, so sorting by distance would slide rows out from under a thumb
           already on its way down. Keyed by membership id for the same reason — the distances
-          update live (that is the point of showing them) while the rows stay put. */}
-      <ScrollView bounces={false} style={styles.list}>
+          update live (that is the point of showing them) while the rows stay put.
+
+          ponytail: a plain View, not a ScrollView — react-native-screens 4.x formSheet applies a
+          frame correction that only supports a rigid header+ScrollView child shape and mispaints
+          anything else (scroll content lands on the title; upstream #2992, won't-fix in 4.x).
+          Ceiling: with fitToContents the sheet is clamped to the largest detent, so a worker with
+          roughly ten or more memberships loses rows past the fold with no way to scroll to them
+          (swipe-dismiss still works, so nothing is ever clocked in blind). Upgrade path: restore
+          the ScrollView when RNS 5.x lands its formSheet layout rework. */}
+      <View>
         {memberships.map((m) => {
           const d = fix ? distanceM(fix, m.employer.anchor) : null;
           // inRange rather than `d <= 1000`: the server rounds to whole metres before comparing.
@@ -116,7 +125,7 @@ export default function ClockIn() {
             </Pressable>
           );
         })}
-      </ScrollView>
+      </View>
 
       <View style={styles.divider} />
 
@@ -157,16 +166,17 @@ export default function ClockIn() {
 }
 
 const styles = StyleSheet.create({
-  // flex: 1 is the formSheet contract: the sheet sizes to its detent and this view fills it. The
-  // scroller inside shrinks when memberships overflow, and Cancel and personal stay outside it,
-  // always reachable.
+  // No flex: 1 — with `fitToContents` react-native-screens positions the sheet container with no
+  // bottom constraint so the sheet's height derives strictly from its children
+  // (ScreenStackItem.tsx getPositioningStyle); a flex child there has no height source and the
+  // content overflows the measured sheet. Bottom padding stands in for the OS inset the old
+  // safe-area math covered.
   sheet: {
-    flex: 1,
     backgroundColor: theme.surface,
     paddingHorizontal: theme.spacing.l,
     paddingTop: theme.spacing.m,
+    paddingBottom: theme.spacing.s,
   },
-  list: { flexShrink: 1 },
   title: {
     color: theme.muted,
     fontSize: 13,
@@ -175,7 +185,11 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing.s,
   },
   // 48 pt even before the two lines of text push it taller.
-  row: { minHeight: 48, justifyContent: "center", paddingVertical: theme.spacing.s },
+  row: {
+    minHeight: 48,
+    justifyContent: "center",
+    paddingVertical: theme.spacing.s,
+  },
   pressed: { opacity: 0.6 },
   name: { color: theme.text, fontSize: 17, fontWeight: "600" },
   // The whole "disabled" treatment: a muted name, no opacity on the row, so the reason below stays

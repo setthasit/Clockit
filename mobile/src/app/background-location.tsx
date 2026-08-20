@@ -107,9 +107,10 @@ export default function BackgroundLocation() {
 }
 
 const styles = StyleSheet.create({
-  // flex: 1 is the formSheet contract: the sheet sizes to its detent and this view fills it.
+  // No flex: 1 — with `fitToContents` react-native-screens derives the sheet's height strictly
+  // from its children (see clock-in.tsx styles for the full note); a flex child there has no
+  // height source and the content overflows the measured sheet.
   sheet: {
-    flex: 1,
     backgroundColor: theme.surface,
     padding: theme.spacing.l,
     gap: theme.spacing.s,
