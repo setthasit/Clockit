@@ -18,25 +18,25 @@ Both consumers (theme.ts and the config plugin) read one hex table, so the pairs
 
 ## Tasks
 
-- [ ] Task 1: Single-source palette
-  - [ ] 1.1: Create `mobile/src/lib/palette.ts` (plain hex pairs)
-  - [ ] 1.2: Rebuild `theme.ts` on top of it
+- [x] Task 1: Single-source palette
+  - [x] 1.1: Create `mobile/src/lib/palette.ts` (plain hex pairs)
+  - [x] 1.2: Rebuild `theme.ts` on top of it
 
-- [ ] Task 2: Token split for correctness in dark
-  - [ ] 2.1: Add `onBrand`, migrate text-on-brand call sites
-  - [ ] 2.2: Add `brandTint`, migrate brand-as-text/tint call sites
+- [x] Task 2: Token split for correctness in dark
+  - [x] 2.1: Add `onBrand`, migrate text-on-brand call sites
+  - [x] 2.2: Add `brandTint`, migrate brand-as-text/tint call sites
 
-- [ ] Task 3: Android day/night color resources
-  - [ ] 3.1: Config plugin writing `colors.xml` + `values-night/colors.xml`
+- [x] Task 3: Android day/night color resources
+  - [x] 3.1: Config plugin writing `colors.xml` + `values-night/colors.xml`
 
-- [ ] Task 4: Turn dark mode on
-  - [ ] 4.1: `userInterfaceStyle: "automatic"` + splash decision
-  - [ ] 4.2: StatusBar audit
-  - [ ] 4.3: Sweep stray hardcoded colors
+- [x] Task 4: Turn dark mode on
+  - [x] 4.1: `userInterfaceStyle: "automatic"` + splash decision
+  - [x] 4.2: StatusBar audit
+  - [x] 4.3: Sweep stray hardcoded colors
 
-- [ ] Task 5: Verification
-  - [ ] 5.1: Typecheck, tests, prebuild check
-  - [ ] 5.2: Both schemes on both platforms + AA spot checks
+- [x] Task 5: Verification
+  - [x] 5.1: Typecheck, tests, prebuild check
+  - [x] 5.2: Both schemes on both platforms + AA spot checks
 
 ## Implementation Details
 
