@@ -1,6 +1,12 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  useColorScheme,
+  View,
+} from "react-native";
 
 import { theme } from "@/lib/theme";
 import { requestShiftTracking } from "@/location/tracking";
@@ -27,6 +33,9 @@ const BACKGROUND_DECLINED =
  * Dismissal is an answer — "not now" — handled by unmount cleanup rather than onRequestClose.
  */
 export default function BackgroundLocation() {
+  // Android: PlatformColor styles in the module-scope StyleSheet go stale on a live uiMode flip
+  // unless the screen re-renders — React Compiler memoizes it otherwise. iOS re-resolves natively.
+  useColorScheme();
   // Snapshot at push time: deriving live from stores would re-derive "Employer" if the membership
   // drops mid-sheet. The fallback matches the clock screen's revoked-membership fallback, and only
   // a hand-typed deep link hits it.

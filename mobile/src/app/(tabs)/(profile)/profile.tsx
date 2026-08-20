@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useColorScheme,
   View,
 } from "react-native";
 import { useAuth0 } from "react-native-auth0";
@@ -54,6 +55,9 @@ const SAVE_COPY: Record<string, string> = {
  * That is §7.1's "fighting it".
  */
 export default function Profile() {
+  // Android: PlatformColor styles in the module-scope StyleSheet go stale on a live uiMode flip
+  // unless the screen re-renders — React Compiler memoizes it otherwise. iOS re-resolves natively.
+  useColorScheme();
   const { clearSession, clearCredentials } = useAuth0();
   const me = useSessionStore((s) => s.me);
   const setProfile = useSessionStore((s) => s.setProfile);

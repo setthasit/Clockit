@@ -1,6 +1,12 @@
 import { Redirect, router } from "expo-router";
 import { useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  useColorScheme,
+  View,
+} from "react-native";
 
 import { clockInNow, UNEXPECTED_ERROR } from "@/lib/clockFlow";
 import { formatDistance } from "@/lib/format";
@@ -32,6 +38,9 @@ import { useSessionStore } from "@/stores/session";
  * never travels on the wire (location/fix.ts), so the client must never be the one to refuse.
  */
 export default function ClockIn() {
+  // Android: PlatformColor styles in the module-scope StyleSheet go stale on a live uiMode flip
+  // unless the screen re-renders — React Compiler memoizes it otherwise. iOS re-resolves natively.
+  useColorScheme();
   // /v1/me returns active memberships only (api/me.ts), so there is nothing here to filter.
   const memberships = useSessionStore((s) => s.me?.memberships ?? []);
   const fix = useFixPoll(memberships.length > 0);

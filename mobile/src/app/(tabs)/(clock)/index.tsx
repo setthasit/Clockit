@@ -7,6 +7,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  useColorScheme,
   View,
 } from "react-native";
 
@@ -27,6 +28,9 @@ import { useSessionStore } from "@/stores/session";
 import { useUiStore } from "@/stores/ui";
 
 export default function Clock() {
+  // Android: PlatformColor styles in the module-scope StyleSheet go stale on a live uiMode flip
+  // unless the screen re-renders — React Compiler memoizes it otherwise. iOS re-resolves natively.
+  useColorScheme();
   const openEntry = useClockStore((s) => s.openEntry);
   const lastClosed = useClockStore((s) => s.lastClosed);
   const pendingSince = useClockStore((s) => s.pendingSince);

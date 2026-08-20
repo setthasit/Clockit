@@ -6,6 +6,7 @@ import {
   SectionList,
   StyleSheet,
   Text,
+  useColorScheme,
   View,
 } from "react-native";
 
@@ -24,6 +25,9 @@ const DAY_MS = 86_400_000;
 const UNEXPECTED_ERROR = "Something went wrong. Pull to refresh.";
 
 export default function History() {
+  // Android: PlatformColor styles in the module-scope StyleSheet go stale on a live uiMode flip
+  // unless the screen re-renders — React Compiler memoizes it otherwise. iOS re-resolves natively.
+  useColorScheme();
   // Its own fetch, not the clock store's: that store keeps two derived entries and throws the rest
   // away, and its list call is deliberately *unbounded* (an open entry has no age limit), which is
   // a cost its own ponytail note is scheduled to shrink to `status=open`. Subscribing this screen

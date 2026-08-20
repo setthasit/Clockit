@@ -1,4 +1,5 @@
 import { NativeTabs } from "expo-router/unstable-native-tabs";
+import { useColorScheme } from "react-native";
 
 import { theme } from "@/lib/theme";
 
@@ -11,6 +12,9 @@ import { theme } from "@/lib/theme";
  * icons and force-mounts every tab — AppTabs.web.tsx keeps the JS Tabs bar there.
  */
 export function AppTabs() {
+  // Android: the PlatformColor tint is plumbed set-once into the native bar, and React Compiler
+  // memoizes this body — subscribe so a live uiMode flip re-sends it. iOS re-resolves natively.
+  useColorScheme();
   return (
     <NativeTabs tintColor={theme.brandTint}>
       {/* The clock screen is a plain View, not a ScrollView, so iOS 18-and-earlier would draw the

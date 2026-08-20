@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useColorScheme,
   View,
 } from "react-native";
 
@@ -73,6 +74,9 @@ function announce(message: string) {
  * 30 days". Upgrade path: pass `from` down from the link, or add the single-entry route.
  */
 export default function EntryDetail() {
+  // Android: PlatformColor styles in the module-scope StyleSheet go stale on a live uiMode flip
+  // unless the screen re-renders — React Compiler memoizes it otherwise. iOS re-resolves natively.
+  useColorScheme();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   // null is "not resolved yet"; `loaded` is what separates that from "resolved, and there is no

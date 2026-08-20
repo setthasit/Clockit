@@ -3,7 +3,14 @@ import { router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SymbolView } from "expo-symbols";
 import { useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useColorScheme,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { theme } from "@/lib/theme";
@@ -23,6 +30,9 @@ import { useUiStore } from "@/stores/ui";
  * Always usage descriptions and this screen is the justification reviewers read.
  */
 export default function Permissions() {
+  // Android: PlatformColor styles in the module-scope StyleSheet go stale on a live uiMode flip
+  // unless the screen re-renders — React Compiler memoizes it otherwise. iOS re-resolves natively.
+  useColorScheme();
   const markSeen = useUiStore((s) => s.markLocationExplainerSeen);
   const insets = useSafeAreaInsets();
   const [asking, setAsking] = useState(false);
