@@ -1,12 +1,14 @@
 import * as Location from "expo-location";
-import { Stack } from "expo-router";
+import { DefaultTheme, Stack, type Theme, ThemeProvider } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
+  useColorScheme,
   View,
 } from "react-native";
 import { Auth0Provider, useAuth0 } from "react-native-auth0";
@@ -16,6 +18,7 @@ import { ApiError } from "@/api/client";
 // TaskManager and arms the clock-store subscription that starts and stops it. Nothing here uses
 // a value from it, so an "unused import" cleanup would silently disable on-shift pings.
 import "@/location/tracking";
+import { palette } from "@/lib/palette";
 import { startSync } from "@/lib/sync";
 import { theme } from "@/lib/theme";
 import { useClockStore } from "@/stores/clock";
@@ -25,7 +28,28 @@ import { auth0Config, useSessionStore } from "@/stores/session";
 import { useUiStore } from "@/stores/ui";
 import Permissions from "./permissions";
 
+// Navigator chrome — native headers, the push/pop transition underlay — reads the
+// react-navigation theme, not our StyleSheets, so dark mode needs its own nav theme. Light stays
+// stock DefaultTheme untouched: its card is rgb(255,255,255) = palette.surface.light, so light
+// rendering is pixel-identical. Dark is hand-picked palette hexes; plain strings only, because
+// the nav theme object feeds consumers that are not ColorValue-aware (no PlatformColor here).
+const darkNavTheme: Theme = {
+  ...DefaultTheme, // keeps `fonts`
+  dark: true,
+  colors: {
+    primary: palette.brandTint.dark,
+    background: palette.surface.dark,
+    card: palette.surface.dark,
+    text: palette.text.dark,
+    // Header and content share `surface`, so the hairline slot matches it — an extra divider
+    // hex would be a new color outside the palette.
+    border: palette.surface.dark,
+    notification: palette.danger.dark,
+  },
+};
+
 export default function RootLayout() {
+  const scheme = useColorScheme();
   // Auth0Provider builds its client *during render* (hooks/Auth0Provider.tsx:56) and the Auth0
   // constructor rejects an empty domain/clientId (core/utils/validation.ts), so a build missing
   // either env var would crash the root before any error UI exists. stores/session.ts made its own
@@ -42,10 +66,17 @@ export default function RootLayout() {
     );
   }
 
+  // Web mirrors theme.ts's web branch: tokens resolve light-only this phase, so a dark browser
+  // must not get dark navigator chrome over light content.
+  const navTheme =
+    Platform.OS === "web" || scheme !== "dark" ? DefaultTheme : darkNavTheme;
+
   return (
-    <Auth0Provider {...auth0Config}>
-      <Gate />
-    </Auth0Provider>
+    <ThemeProvider value={navTheme}>
+      <Auth0Provider {...auth0Config}>
+        <Gate />
+      </Auth0Provider>
+    </ThemeProvider>
   );
 }
 
@@ -168,11 +199,11 @@ function Gate() {
     return startSync();
   }, [signedIn]);
 
-  // `styles.screen` is brand blue, so these two carry their own StatusBar. Deliberately here and
-  // not once around the whole component: RN applies the LAST-MOUNTED entry of a props stack and
-  // componentDidMount runs child-first, so a single instance wrapping the returns below would be
-  // pushed after every screen's and override all of them — including (tabs)', whose light
-  // backgrounds are the reason any of this exists.
+  // `styles.screen` is brand blue (in both schemes), so these two carry their own StatusBar.
+  // Deliberately here and not once around the whole component: RN applies the LAST-MOUNTED entry
+  // of a props stack and componentDidMount runs child-first, so a single instance wrapping the
+  // returns below would be pushed after every screen's and override all of them — including
+  // (tabs)', whose scheme-following surfaces are the reason any of this exists.
   const spinner = (
     <View style={styles.screen}>
       <StatusBar style="light" />

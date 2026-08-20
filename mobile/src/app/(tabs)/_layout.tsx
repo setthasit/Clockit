@@ -5,9 +5,10 @@ import { AppTabs } from "@/components/AppTabs";
 /**
  * One `StatusBar` per background colour, and never one at the root. Android's generated AppTheme
  * sets no `windowLightStatusBar`, which defaults to false — white icons, invisible over this
- * app's `theme.surface` screens (RN's WindowUtil only sets APPEARANCE_LIGHT_STATUS_BARS for
- * "dark-content"). iOS already renders dark content from `userInterfaceStyle: "light"`, so there
- * this is a no-op that keeps the two platforms saying the same thing.
+ * app's light-scheme `theme.surface` screens. "auto" resolves per the system scheme: dark icons
+ * while the surface is light, white icons once dark mode flips it to near-black — the icons track
+ * the scheme because the surface does. iOS resolves the same way under
+ * `userInterfaceStyle: "automatic"`, so the two platforms keep saying the same thing.
  *
  * Root-level would be wrong, not merely redundant: RN's StatusBar applies the LAST-MOUNTED entry
  * of a props stack, and componentDidMount runs child-first — so a root instance is pushed after
@@ -23,7 +24,7 @@ import { AppTabs } from "@/components/AppTabs";
 export default function TabsLayout() {
   return (
     <>
-      <StatusBar style="dark" />
+      <StatusBar style="auto" />
       <AppTabs />
     </>
   );

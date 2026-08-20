@@ -318,13 +318,13 @@ const styles = StyleSheet.create({
   },
   skeleton: { padding: theme.spacing.l, gap: theme.spacing.l },
   skeletonRow: { gap: theme.spacing.s },
-  // Grey on white at 8% — visible as a placeholder, too faint to read as content. Not a theme
-  // token: nothing else in the app draws a placeholder, and one more colour in theme.ts would be
-  // a token with a single caller.
+  // Mid-gray at 16% — reads as a placeholder on both the white and the #151718 surface, too
+  // faint to read as content on either. Not a theme token: nothing else in the app draws a
+  // placeholder, and one more colour in theme.ts would be a token with a single caller.
   skeletonBar: {
     height: 14,
     borderRadius: theme.radius.m,
-    backgroundColor: "rgba(104,112,118,0.12)",
+    backgroundColor: "rgba(127,127,127,0.16)",
   },
   skeletonTitle: { width: "55%" },
   skeletonSub: { width: "35%", height: 12 },

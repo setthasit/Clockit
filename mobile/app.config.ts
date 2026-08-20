@@ -12,8 +12,7 @@ const config: ExpoConfig = {
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: "clockit",
-  // theme.ts is a single light palette, so dark native chrome would clash.
-  userInterfaceStyle: "light",
+  userInterfaceStyle: "automatic",
   ios: {
     bundleIdentifier: "dev.setthasit.clockit",
     icon: "./assets/expo.icon",

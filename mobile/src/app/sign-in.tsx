@@ -63,9 +63,10 @@ export default function SignIn() {
 
   return (
     <View style={styles.screen}>
-      {/* The one screen in the Stack on `theme.brand`, so it says so rather than relying on
-          Android's default — which is white icons only until some other screen's StatusBar has
-          set the appearance flag and unmounted again. */}
+      {/* The one screen in the Stack on `theme.brand` — brand blue in both schemes, so "light"
+          stays correct rather than "auto" — and it says so rather than relying on Android's
+          default, which is white icons only until some other screen's StatusBar has set the
+          appearance flag and unmounted again. */}
       <StatusBar style="light" />
       {/* ponytail: a wordmark, because assets/ holds only Expo template art and shipping that as
           a logo would be worse than type. Swap in an <Image> when there is a real mark. */}

@@ -69,8 +69,9 @@ export default function Permissions() {
     >
       {/* Its own, rather than inherited from (tabs)/_layout.tsx: on a first launch the gate
           renders this screen directly, before any navigator exists, so nothing else is mounted
-          to keep Android's default white icons off this light background. */}
-      <StatusBar style="dark" />
+          to make the icons track the scheme this `theme.surface` background follows — "auto" is
+          dark icons on the light surface, white on the dark one. */}
+      <StatusBar style="auto" />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.body}>
         {/* Decorative: SymbolView forwards no a11y props, and on Android it renders a bare <Text>
             glyph that TalkBack would otherwise stop on and read as a character. */}
