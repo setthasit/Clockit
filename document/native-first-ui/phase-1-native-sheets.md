@@ -28,9 +28,9 @@ Both were built as `Modal` because `@expo/ui`'s `BottomSheet` cannot label rows 
   - [x] 1.1: Create `useFixPoll` in `mobile/src/location/useFixPoll.ts`
   - [x] 1.2: Rewire clock screen to use it
 
-- [ ] Task 2: Transient tracking notice in ui store
-  - [ ] 2.1: Add `trackingNotice` to `useUiStore`
-  - [ ] 2.2: Pin non-persistence in `ui.test.js`
+- [x] Task 2: Transient tracking notice in ui store
+  - [x] 2.1: Add `trackingNotice` to `useUiStore`
+  - [x] 2.2: Pin non-persistence in `ui.test.js`
 
 - [ ] Task 3: Clock-in sheet route
   - [ ] 3.1: Create `mobile/src/app/clock-in.tsx`

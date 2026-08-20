@@ -8,8 +8,12 @@ type UiState = {
   /** The on-shift tracking pitch has been put to this worker once. Whatever they answered — a
    * grant, a refusal, or walking away from Android's settings page — it is never put again. */
   backgroundPromptSeen: boolean;
+  /** Transient, like `hydrated`: one screen's message about the answer just given. Kept out of
+   * partialize so a relaunch cannot resurrect a stale notice. */
+  trackingNotice: string | null;
   markLocationExplainerSeen(): void;
   markBackgroundPromptSeen(): void;
+  setTrackingNotice(notice: string | null): void;
 };
 
 /**
@@ -39,9 +43,11 @@ export const useUiStore = create<UiState>()(
       hydrated: false,
       locationExplainerSeen: false,
       backgroundPromptSeen: false,
+      trackingNotice: null,
 
       markLocationExplainerSeen: () => set({locationExplainerSeen: true}),
       markBackgroundPromptSeen: () => set({backgroundPromptSeen: true}),
+      setTrackingNotice: (notice) => set({trackingNotice: notice}),
     }),
     {
       name: 'clockit-ui',

@@ -111,6 +111,25 @@ test('hydrated is never persisted, so every launch starts false', async () => {
   assert.equal(relaunch.state.locationExplainerSeen, true);
 });
 
+test('trackingNotice is never persisted, so a relaunch starts with no notice', async () => {
+  // A persisted notice would greet every cold start with "check-ins are off" about a shift long
+  // over — the field is one screen's message about the answer just given, nothing more.
+  const noticed = await launch('noticed');
+  noticed.store.getState().markLocationExplainerSeen();
+  noticed.store.getState().setTrackingNotice('Background tracking declined');
+  await settle();
+  assert.deepEqual(JSON.parse(items.get(KEY)).state, {
+    locationExplainerSeen: true,
+    backgroundPromptSeen: false,
+  });
+
+  // launch() clears storage, so seed the relaunch with the blob written above: the flags survive,
+  // the notice does not.
+  const relaunch = await launch('notice-relaunch', items.get(KEY));
+  assert.equal(relaunch.state.trackingNotice, null, 'a stale notice was resurrected at cold start');
+  assert.equal(relaunch.state.locationExplainerSeen, true);
+});
+
 // The store has no `version`/`migrate`, so this is what carries a phone upgrading across a
 // schema change: a blob written before a field existed must land on that field's default rather
 // than on undefined, which reads as "already asked" nowhere but would if a flag were inverted.
