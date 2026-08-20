@@ -273,6 +273,16 @@ function Gate() {
             contentStyle: { backgroundColor: "transparent" }, // liquid glass on iOS 26+
           }}
         />
+        <Stack.Screen
+          name="background-location"
+          options={{
+            presentation: "formSheet",
+            sheetAllowedDetents: "fitToContents",
+            sheetGrabberVisible: true, // iOS-only; Android ignores
+            headerShown: false,
+            contentStyle: { backgroundColor: "transparent" }, // liquid glass on iOS 26+
+          }}
+        />
       </Stack.Protected>
       <Stack.Protected guard={!signedIn}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />

@@ -36,9 +36,9 @@ Both were built as `Modal` because `@expo/ui`'s `BottomSheet` cannot label rows 
   - [x] 3.1: Create `mobile/src/app/clock-in.tsx`
   - [x] 3.2: Register in root stack with formSheet options
 
-- [ ] Task 4: Background-location sheet route
-  - [ ] 4.1: Create `mobile/src/app/background-location.tsx`
-  - [ ] 4.2: Register in root stack with formSheet options
+- [x] Task 4: Background-location sheet route
+  - [x] 4.1: Create `mobile/src/app/background-location.tsx`
+  - [x] 4.2: Register in root stack with formSheet options
 
 - [ ] Task 5: Rewire clock screen
   - [ ] 5.1: Replace `sheetOpen` state with `router.push`
