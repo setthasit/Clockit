@@ -10,10 +10,8 @@ import {
   View,
 } from "react-native";
 
-import { BackgroundSheet } from "@/components/BackgroundSheet";
 import { ClockButton } from "@/components/ClockButton";
 import { DistanceBadge } from "@/components/DistanceBadge";
-import { EmployerSheet } from "@/components/EmployerSheet";
 import {
   type ClockResult,
   clockInNow,
@@ -22,18 +20,11 @@ import {
 } from "@/lib/clockFlow";
 import { formatClock, formatDuration } from "@/lib/format";
 import { theme } from "@/lib/theme";
-import { requestShiftTracking, syncShiftTracking } from "@/location/tracking";
+import { syncShiftTracking } from "@/location/tracking";
 import { useFixPoll } from "@/location/useFixPoll";
 import { useClockStore } from "@/stores/clock";
 import { useSessionStore } from "@/stores/session";
 import { useUiStore } from "@/stores/ui";
-
-// Shown once, after the on-shift tracking pitch is turned down. Deliberately says nothing about
-// *why* it is off: on Android 11+ the request opens Settings rather than a dialog, so at this
-// point the app genuinely does not know whether the worker refused or is still deciding. Both
-// readings are true of this sentence, and both have the same consequence.
-const BACKGROUND_DECLINED =
-  "Check-ins are off. Your shift still records — your employer just won't see it running in between.";
 
 export default function Clock() {
   const openEntry = useClockStore((s) => s.openEntry);
@@ -44,20 +35,15 @@ export default function Clock() {
   // Never auto-requests; the explainer at /permissions owns the prompt. `permission` is null until
   // the first read resolves, which is why "blocked" below is not simply `!granted`.
   const [permission, , refreshPermission] = Location.useForegroundPermissions();
-  // Read on mount, never requested by the hook: the sheet below owns the ask, and it only ever
-  // happens on an employer shift. Refreshed on foreground beside the other one, because Android
-  // answers this permission in Settings rather than in a dialog.
+  // Read on mount, never requested by the hook: the /background-location route owns the ask, and
+  // it only ever happens on an employer shift. Refreshed on foreground beside the other one,
+  // because Android answers this permission in Settings rather than in a dialog.
   const [backgroundPermission, , refreshBackgroundPermission] =
     Location.useBackgroundPermissions();
   const backgroundPromptSeen = useUiStore((s) => s.backgroundPromptSeen);
-  const markBackgroundPromptSeen = useUiStore((s) => s.markBackgroundPromptSeen);
-  const [askingBackground, setAskingBackground] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const notice = useUiStore((s) => s.trackingNotice);
   const [now, setNow] = useState(() => Date.now());
   const [foreground, setForeground] = useState(true);
-  // The sheet is controlled from here, not self-managing: task 6.4 needs to keep it open while a
-  // request is in flight and close it only once the write lands.
-  const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The actual concurrency guard. `busy` renders the spinner and inerts the controls, but state
@@ -73,11 +59,10 @@ export default function Clock() {
     setError(null);
     // The tracking notice is about the *previous* shift's answer; a new tap makes it stale, and
     // a worker who has since turned Always on in Settings would otherwise keep reading it.
-    setNotice(null);
+    useUiStore.getState().setTrackingNotice(null);
     try {
-      const { done, message } = await act();
+      const { message } = await act();
       setError(message);
-      if (done) setSheetOpen(false);
     } catch {
       // clockFlow resolves rather than rejects for everything it owns, so this is a bug in ours.
       // Caught anyway: the alternative is an unhandled rejection and a button that has already
@@ -194,20 +179,19 @@ export default function Clock() {
     !backgroundPermission.granted &&
     backgroundPermission.canAskAgain;
 
-  // Marked seen on every path out, including a throw: a request that raised no prompt (web, or a
-  // build without the native module) must not put this sheet back up on the next render loop.
-  const answerBackground = async (allow: boolean) => {
-    setAskingBackground(true);
-    try {
-      if (allow && (await requestShiftTracking())) return;
-      setNotice(BACKGROUND_DECLINED);
-    } catch {
-      // Nothing was asked and nothing can be: no copy claiming the worker chose this.
-    } finally {
-      markBackgroundPromptSeen();
-      setAskingBackground(false);
-    }
-  };
+  // Fires only while this screen has focus, which is what prevents the background sheet from
+  // stacking on top of the still-open clock-in sheet (store updates land before the sheet's
+  // router.back()). After the route answers, markBackgroundPromptSeen flips the condition false,
+  // so re-focus cannot re-push.
+  useFocusEffect(
+    useCallback(() => {
+      if (!askBackground) return;
+      router.push({
+        pathname: "/background-location",
+        params: { employer: employerName },
+      });
+    }, [askBackground, employerName]),
+  );
 
   const granted = permission?.granted === true;
   // ponytail: the null guard keeps "Open settings" from flashing on every cold launch, and pays for
@@ -225,8 +209,8 @@ export default function Clock() {
   const showDistance = !openEntry && hasEmployers && granted;
   const polling = showDistance && foreground;
 
-  // One poller on this screen, from the shared hook: the badge and the sheet both take this as a
-  // prop and do their own arithmetic with distanceM.
+  // One poller on this screen, from the shared hook: the badge is the only consumer here (the
+  // clock-in route polls for itself with the same hook) and does its own arithmetic with distanceM.
   const fix = useFixPoll(polling);
 
   return (
@@ -284,17 +268,16 @@ export default function Clock() {
             if (openEntry) {
               void run(() => clockOutNow(memberships ?? []));
             } else if (hasEmployers) {
-              setError(null);
-              setSheetOpen(true);
+              router.push("/clock-in");
             } else {
               void run(() => clockInNow(null, []));
             }
           }}
         />
 
-        {/* On the screen only while the sheet is closed — an open sheet covers this, and renders
-            the same message itself. */}
-        {!sheetOpen && error != null && (
+        {/* Only ever set by clock-out or a personal clock-in, both of which happen on this
+            screen — the clock-in sheet renders its own error. */}
+        {error != null && (
           <Text accessibilityLiveRegion="polite" style={styles.error}>
             {error}
           </Text>
@@ -337,38 +320,6 @@ export default function Clock() {
           </View>
         )}
       </View>
-
-      {/* Same `fix` as the badge — one poller on this screen, two consumers, each doing its own
-          arithmetic with distanceM. Renders nothing at all without memberships, which it enforces
-          itself. */}
-      <EmployerSheet
-        visible={sheetOpen}
-        memberships={memberships ?? []}
-        fix={fix}
-        busy={busy}
-        error={error}
-        // Stays open across the request and closes only once the write is committed — `run` closes
-        // it on `done`, so a refusal leaves the choice, and the message, in place.
-        onSelect={(employerId) =>
-          void run(() => clockInNow(employerId, memberships ?? []))
-        }
-        onDismiss={() => {
-          setSheetOpen(false);
-          setError(null);
-        }}
-      />
-
-      {/* Mounted only while it is wanted, so answering it unmounts it — there is no "seen" state
-          here to keep in step with the persisted flag. */}
-      {askBackground && (
-        <BackgroundSheet
-          visible
-          employerName={employerName}
-          busy={askingBackground}
-          onAllow={() => void answerBackground(true)}
-          onDismiss={() => void answerBackground(false)}
-        />
-      )}
     </View>
   );
 }

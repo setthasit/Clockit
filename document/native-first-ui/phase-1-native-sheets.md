@@ -40,10 +40,10 @@ Both were built as `Modal` because `@expo/ui`'s `BottomSheet` cannot label rows 
   - [x] 4.1: Create `mobile/src/app/background-location.tsx`
   - [x] 4.2: Register in root stack with formSheet options
 
-- [ ] Task 5: Rewire clock screen
-  - [ ] 5.1: Replace `sheetOpen` state with `router.push`
-  - [ ] 5.2: Replace conditional `BackgroundSheet` mount with focus-guarded push
-  - [ ] 5.3: Render `trackingNotice` from the store
+- [x] Task 5: Rewire clock screen
+  - [x] 5.1: Replace `sheetOpen` state with `router.push`
+  - [x] 5.2: Replace conditional `BackgroundSheet` mount with focus-guarded push
+  - [x] 5.3: Render `trackingNotice` from the store
 
 - [ ] Task 6: Delete Modal sheets
   - [ ] 6.1: Remove `EmployerSheet.tsx` and `BackgroundSheet.tsx`
