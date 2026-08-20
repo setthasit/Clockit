@@ -197,6 +197,7 @@ export default function History() {
   // refreshControl (both are VirtualizedList). Pull-to-refresh is unaffected.
   return (
     <SectionList
+      contentInsetAdjustmentBehavior="automatic"
       sections={sections}
       keyExtractor={(row) => row.entry.client_id}
       renderItem={({ item }) => (

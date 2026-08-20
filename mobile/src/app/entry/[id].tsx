@@ -199,6 +199,7 @@ export default function EntryDetail() {
 
   return (
     <ScrollView
+      contentInsetAdjustmentBehavior="automatic"
       style={styles.screen}
       contentContainerStyle={styles.content}
       refreshControl={

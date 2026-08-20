@@ -161,6 +161,7 @@ export default function Profile() {
 
   return (
     <ScrollView
+      contentInsetAdjustmentBehavior="automatic"
       style={styles.screen}
       contentContainerStyle={styles.content}
       refreshControl={
