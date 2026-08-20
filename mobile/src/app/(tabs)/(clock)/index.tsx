@@ -10,7 +10,6 @@ import {
   View,
 } from "react-native";
 
-import type { Fix } from "@/api/types";
 import { BackgroundSheet } from "@/components/BackgroundSheet";
 import { ClockButton } from "@/components/ClockButton";
 import { DistanceBadge } from "@/components/DistanceBadge";
@@ -23,13 +22,11 @@ import {
 } from "@/lib/clockFlow";
 import { formatClock, formatDuration } from "@/lib/format";
 import { theme } from "@/lib/theme";
-import { getFix } from "@/location/fix";
 import { requestShiftTracking, syncShiftTracking } from "@/location/tracking";
+import { useFixPoll } from "@/location/useFixPoll";
 import { useClockStore } from "@/stores/clock";
 import { useSessionStore } from "@/stores/session";
 import { useUiStore } from "@/stores/ui";
-
-const FIX_POLL_MS = 15_000;
 
 // Shown once, after the on-shift tracking pitch is turned down. Deliberately says nothing about
 // *why* it is off: on Android 11+ the request opens Settings rather than a dialog, so at this
@@ -57,10 +54,6 @@ export default function Clock() {
   const [askingBackground, setAskingBackground] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  // Owned here, not inside DistanceBadge: task 6.3's EmployerSheet needs a live distance per
-  // membership from the same reading, and two 15 s pollers on one screen would be a defect. The
-  // badge and the sheet both take this as a prop and do their own arithmetic with distanceM.
-  const [fix, setFix] = useState<Fix | null>(null);
   const [foreground, setForeground] = useState(true);
   // The sheet is controlled from here, not self-managing: task 6.4 needs to keep it open while a
   // request is in flight and close it only once the write lands.
@@ -232,48 +225,9 @@ export default function Clock() {
   const showDistance = !openEntry && hasEmployers && granted;
   const polling = showDistance && foreground;
 
-  // Self-chaining timeout, not setInterval: getFix() is bounded by its own 15 s race, exactly the
-  // poll period, so an interval could start a second read while the first is still running and then
-  // apply them out of order. Waiting FIX_POLL_MS *after* each reading settles makes overlap
-  // impossible without a generation counter (stores/clock.ts) — the `cancelled` flag from
-  // _layout.tsx is all that is left to need, since only teardown can now race a result. A slow or
-  // timing-out fix backs the cadence off on its own, which is the right direction for battery.
-  //
-  // "Impossible" holds *within* a chain, not across a teardown and restart: a discarded in-flight
-  // getFix() still runs natively (fix.ts:60-63), so a background→foreground or blur→focus cycle can
-  // leave two native reads overlapping, and rapid tab churn fires one unthrottled read per focus.
-  // Not worth a lastReadAt ref — but tasks 6.3 and 6.4 must not inherit the stronger reading.
-  //
-  // First read fires immediately: waiting 15 s to say anything would mean the badge is still
-  // "Checking distance…" for most of the time a worker spends on this screen before tapping.
-  useFocusEffect(
-    useCallback(() => {
-      if (!polling) return;
-      let cancelled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const read = async () => {
-        try {
-          const next = await getFix();
-          if (!cancelled) setFix(next);
-        } catch {
-          // A pre-check that cannot read the GPS is not worth alarming anyone with: the button
-          // still works and the server still decides. Caught here so it is never an unhandled
-          // rejection, and the error object is deliberately neither inspected nor logged.
-          if (!cancelled) setFix(null);
-        }
-        if (!cancelled) timer = setTimeout(read, FIX_POLL_MS);
-      };
-      read();
-      return () => {
-        cancelled = true;
-        clearTimeout(timer);
-        // Dropped rather than kept: a reading from before the tab was left is a distance the
-        // worker may have walked out of, and showing it stale is worse than showing nothing for
-        // the moment it takes the immediate read above to replace it.
-        setFix(null);
-      };
-    }, [polling]),
-  );
+  // One poller on this screen, from the shared hook: the badge and the sheet both take this as a
+  // prop and do their own arithmetic with distanceM.
+  const fix = useFixPoll(polling);
 
   return (
     <View style={styles.screen}>

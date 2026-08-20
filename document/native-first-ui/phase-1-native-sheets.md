@@ -24,9 +24,9 @@ Both were built as `Modal` because `@expo/ui`'s `BottomSheet` cannot label rows 
 
 ## Tasks
 
-- [ ] Task 1: Extract shared fix poller hook
-  - [ ] 1.1: Create `useFixPoll` in `mobile/src/location/useFixPoll.ts`
-  - [ ] 1.2: Rewire clock screen to use it
+- [x] Task 1: Extract shared fix poller hook
+  - [x] 1.1: Create `useFixPoll` in `mobile/src/location/useFixPoll.ts`
+  - [x] 1.2: Rewire clock screen to use it
 
 - [ ] Task 2: Transient tracking notice in ui store
   - [ ] 2.1: Add `trackingNotice` to `useUiStore`
