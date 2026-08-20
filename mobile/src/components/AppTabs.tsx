@@ -5,7 +5,7 @@ import { theme } from "@/lib/theme";
 /**
  * Real platform tab bars — UITabBar on iOS (liquid glass on 26+), Material 3 bottom navigation on
  * Android — instead of react-navigation's JS one. Children stay plain RN views, so this dodges the
- * @expo/ui accessibility gaps documented in EmployerSheet.tsx entirely.
+ * @expo/ui accessibility gaps documented in app/clock-in.tsx entirely.
  *
  * A component, not the layout itself, because NativeTabs on web renders Radix top-tabs with no
  * icons and force-mounts every tab — AppTabs.web.tsx keeps the JS Tabs bar there.

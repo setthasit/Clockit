@@ -45,8 +45,8 @@ Both were built as `Modal` because `@expo/ui`'s `BottomSheet` cannot label rows 
   - [x] 5.2: Replace conditional `BackgroundSheet` mount with focus-guarded push
   - [x] 5.3: Render `trackingNotice` from the store
 
-- [ ] Task 6: Delete Modal sheets
-  - [ ] 6.1: Remove `EmployerSheet.tsx` and `BackgroundSheet.tsx`
+- [x] Task 6: Delete Modal sheets
+  - [x] 6.1: Remove `EmployerSheet.tsx` and `BackgroundSheet.tsx`
 
 - [ ] Task 7: Verification
   - [ ] 7.1: Typecheck + unit tests

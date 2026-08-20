@@ -15,8 +15,8 @@ type Props = {
 
 /**
  * "620 m from Acme Cafe — in range", so a worker knows before they tap whether the server is
- * likely to accept. Pure render: the screen owns the fix (one poller for this and task 6.3's
- * EmployerSheet, which reads the same fix and computes its own per-membership distances).
+ * likely to accept. Pure render: the screen owns the fix (the clock-in sheet route runs its own
+ * poller with the same hook and computes its own per-membership distances).
  *
  * The copy describes the *distance*, never the outcome — inRange only mirrors the anchor radius
  * as this build knows it (fix.ts documents that the real one is never sent on the wire), and the
@@ -33,7 +33,7 @@ export function DistanceBadge({ memberships, fix }: Props) {
   // fix.accuracy is deliberately not consulted below either, so a 150 m-accuracy indoor fix can
   // render "80 m — in range". That costs a dialog and never a server rejection: task 6.4 catches
   // accuracy > 100 locally with a "GPS weak — try anyway?" confirm before any request, and owns
-  // that check for both this badge and the EmployerSheet.
+  // that check for both this badge and the clock-in sheet.
   if (!fix) {
     return (
       <View style={styles.badge}>
