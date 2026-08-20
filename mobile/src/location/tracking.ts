@@ -3,7 +3,7 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 
 import type {Ping} from '@/api/entries';
-import {theme} from '@/lib/theme';
+import {palette} from '@/lib/palette';
 import {useClockStore} from '@/stores/clock';
 import {useOutboxStore} from '@/stores/outbox';
 
@@ -88,7 +88,9 @@ async function start(): Promise<void> {
     foregroundService: {
       notificationTitle: 'On shift',
       notificationBody: 'ClockIt is recording your shift location',
-      notificationColor: theme.brand,
+      // notificationColor is string-typed (parsed natively by expo-location); palette is pure
+      // data, whereas importing theme.ts would pull react-native into node:test.
+      notificationColor: palette.brand.light,
       // The service outlives a swipe-away, which is the point: an Android worker who clears the
       // app from recents mid-shift is not clocking out, and the notification stays up saying so.
       killServiceOnDestroy: false,

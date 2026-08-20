@@ -75,6 +75,7 @@ const config: ExpoConfig = {
         isAndroidForegroundServiceEnabled: true,
       },
     ],
+    "./plugins/withNativeColors.ts",
   ],
   experiments: {
     typedRoutes: true,
