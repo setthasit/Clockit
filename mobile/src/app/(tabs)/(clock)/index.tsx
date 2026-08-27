@@ -20,6 +20,7 @@ import {
   UNEXPECTED_ERROR,
 } from "@/lib/clockFlow";
 import { formatClock, formatDuration } from "@/lib/format";
+import { notifyClockSuccess } from "@/lib/haptics";
 import { theme } from "@/lib/theme";
 import { syncShiftTracking } from "@/location/tracking";
 import { useFixPoll } from "@/location/useFixPoll";
@@ -65,7 +66,8 @@ export default function Clock() {
     // a worker who has since turned Always on in Settings would otherwise keep reading it.
     useUiStore.getState().setTrackingNotice(null);
     try {
-      const { message } = await act();
+      const { done, message } = await act();
+      if (done) notifyClockSuccess();
       setError(message);
     } catch {
       // clockFlow resolves rather than rejects for everything it owns, so this is a bug in ours.

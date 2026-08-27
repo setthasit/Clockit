@@ -10,6 +10,7 @@ import {
 
 import { clockInNow, UNEXPECTED_ERROR } from "@/lib/clockFlow";
 import { formatDistance } from "@/lib/format";
+import { notifyClockSuccess } from "@/lib/haptics";
 import { theme } from "@/lib/theme";
 import { distanceM, inRange } from "@/location/fix";
 import { useFixPoll } from "@/location/useFixPoll";
@@ -59,8 +60,12 @@ export default function ClockIn() {
     setError(null);
     try {
       const { done, message } = await clockInNow(employerId, memberships);
-      if (done) router.back();
-      else setError(message);
+      if (done) {
+        notifyClockSuccess();
+        router.back();
+      } else {
+        setError(message);
+      }
     } catch {
       setError(UNEXPECTED_ERROR);
     } finally {
